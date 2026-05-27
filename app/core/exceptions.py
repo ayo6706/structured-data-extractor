@@ -40,3 +40,14 @@ class StorageError(ExtractorError):
             f"Failed to {operation} storage path {path}: "
             f"{original_exception}"
         )
+
+
+class ClassificationError(ExtractorError):
+    """Raised when the LLM classification call fails."""
+
+    def __init__(
+        self, message: str, original_exception: Exception | None = None
+    ) -> None:
+        self.original_exception = original_exception
+        super().__init__(message)
+

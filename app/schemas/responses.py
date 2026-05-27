@@ -12,7 +12,12 @@ class SchemaListResponse(BaseModel):
     schemas: list[SchemaInfoResponse]
 
 
+class ExtractResponse(BaseModel):
+    doc_type: str
+
+
 class ErrorResponse(BaseModel):
     error_code: str
     message: str
     details: str | None = None
+

@@ -24,6 +24,7 @@ class AppConfig(BaseSettings):
     DB_MAX_OVERFLOW: int = Field(default=10, ge=0)
     DB_POOL_RECYCLE: int = Field(default=1800, ge=-1)
     DB_ECHO: bool = False
+    MAX_UPLOAD_SIZE_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
 
     @field_validator("STORAGE_LOCAL_DIR")
     @classmethod
