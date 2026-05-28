@@ -15,6 +15,7 @@ from app.core.exceptions import (
     UnsupportedDocumentTypeError,
 )
 from app.main import app
+from app.schemas.requests import ExtractionStrategy
 from app.schemas.responses import ExtractResponse
 
 
@@ -76,6 +77,63 @@ async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
     assert data["input_tokens"] == 100
     assert data["output_tokens"] == 50
     extraction_service.extract_upload.assert_called_once()
+    assert (
+        extraction_service.extract_upload.call_args.kwargs["strategy"] is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_passes_strategy_query_param(
+    mock_deps: tuple[AsyncMock, AsyncMock],
+) -> None:
+    _, extraction_service = mock_deps
+    extraction_service.extract_upload.return_value = ExtractResponse(
+        extraction_id=uuid4(),
+        doc_type="invoice",
+        status="completed",
+        extracted_data={"vendor_name": "Acme Corp"},
+        confidence_map={"vendor_name": 0.85},
+        warnings=[],
+        model_used="test-model",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/extract",
+            params={"strategy": "page_by_page"},
+            files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert (
+        extraction_service.extract_upload.call_args.kwargs["strategy"]
+        == ExtractionStrategy.PAGE_BY_PAGE
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_rejects_invalid_strategy(
+    mock_deps: tuple[AsyncMock, AsyncMock],
+) -> None:
+    _, extraction_service = mock_deps
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/extract",
+            params={"strategy": "unknown"},
+            files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
+        )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    extraction_service.extract_upload.assert_not_called()
 
 
 @pytest.mark.asyncio

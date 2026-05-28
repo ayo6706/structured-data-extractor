@@ -10,6 +10,7 @@ from app.core.exceptions import (
 )
 from app.integrations.llm.client import LLMClientError, ToolCallResult
 from app.models.extraction import Extraction, ExtractionStatus
+from app.schemas.requests import ExtractionStrategy
 from app.services.extraction import EXTRACTION_SYSTEM_PROMPT, ExtractionService
 
 
@@ -166,6 +167,176 @@ async def test_extract_from_text_wraps_llm_client_error(
 
     assert exc_info.value.attempts == 1
     assert isinstance(exc_info.value.original_exception, LLMClientError)
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pages_full_uses_all_pages(
+    extraction_service: ExtractionService,
+) -> None:
+    extraction_service.extract_from_text = AsyncMock(
+        return_value=(
+            {"vendor_name": "Acme Corp"},
+            100,
+            50,
+        )
+    )
+
+    result = await extraction_service.extract_from_pages(
+        pages=["First page", "Second page"],
+        doc_type="invoice",
+        strategy=ExtractionStrategy.FULL,
+    )
+
+    assert result.strategy == ExtractionStrategy.FULL
+    assert result.source_pages == [0, 1]
+    assert result.input_tokens == 100
+    assert result.output_tokens == 50
+    call = extraction_service.extract_from_text.call_args
+    assert "Page 0:\nFirst page" in call.kwargs["text"]
+    assert "Page 1:\nSecond page" in call.kwargs["text"]
+
+
+def test_resolve_strategy_defaults_to_full_for_backwards_compatibility() -> None:
+    assert (
+        ExtractionService._resolve_strategy(strategy=None)
+        == ExtractionStrategy.FULL
+    )
+    assert (
+        ExtractionService._resolve_strategy(
+            strategy="smart",
+        )
+        == ExtractionStrategy.SMART
+    )
+
+
+def test_select_pages_includes_first_last_and_monetary_pages() -> None:
+    pages = [
+        "Cover",
+        "Terms only",
+        "Total amount due is USD 50",
+        "Signature",
+    ]
+
+    selected = ExtractionService._select_pages(pages)
+
+    assert selected == [
+        (0, "Cover"),
+        (2, "Total amount due is USD 50"),
+        (3, "Signature"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_page_by_page_merges_schema_fields_and_tracks_sources(
+    extraction_service: ExtractionService,
+) -> None:
+    extraction_service.extract_from_text = AsyncMock(
+        side_effect=[
+            (
+                {
+                    "parties": [{"name": "Client Corp", "role": "Client"}],
+                    "effective_date": "2026-05-27",
+                    "key_obligations": ["Deliver goods"],
+                },
+                10,
+                5,
+            ),
+            (
+                {
+                    "parties": [{"name": "Vendor Corp", "role": "Vendor"}],
+                    "payment_amount": "1500.00",
+                    "key_obligations": ["Support rollout"],
+                },
+                12,
+                6,
+            ),
+        ]
+    )
+
+    result = await extraction_service.extract_from_pages(
+        pages=["Client terms", "Payment terms"],
+        doc_type="contract",
+        strategy=ExtractionStrategy.PAGE_BY_PAGE,
+    )
+
+    assert result.raw_output == {
+        "parties": [
+            {"name": "Client Corp", "role": "Client"},
+            {"name": "Vendor Corp", "role": "Vendor"},
+        ],
+        "effective_date": "2026-05-27",
+        "key_obligations": ["Deliver goods", "Support rollout"],
+        "payment_amount": "1500.00",
+    }
+    assert result.source_pages == [0, 1]
+    assert result.field_source_pages == {
+        "parties": [0, 1],
+        "effective_date": [0],
+        "key_obligations": [0, 1],
+        "payment_amount": [1],
+    }
+    assert result.input_tokens == 22
+    assert result.output_tokens == 11
+
+
+@pytest.mark.asyncio
+async def test_page_by_page_replaces_scalar_source_page_on_better_value(
+    extraction_service: ExtractionService,
+) -> None:
+    extraction_service.extract_from_text = AsyncMock(
+        side_effect=[
+            ({"governing_law": "NY"}, 10, 5),
+            ({"governing_law": "New York State"}, 12, 6),
+        ]
+    )
+
+    result = await extraction_service.extract_from_pages(
+        pages=["Short law", "Specific law"],
+        doc_type="contract",
+        strategy=ExtractionStrategy.PAGE_BY_PAGE,
+    )
+
+    assert result.raw_output == {"governing_law": "New York State"}
+    assert result.source_pages == [1]
+    assert result.field_source_pages == {"governing_law": [1]}
+
+
+@pytest.mark.asyncio
+async def test_page_by_page_skips_failed_pages_when_others_succeed(
+    extraction_service: ExtractionService,
+) -> None:
+    extraction_service.extract_from_text = AsyncMock(
+        side_effect=[
+            ExtractionError(
+                "page failed",
+                attempts=1,
+                input_tokens=7,
+                output_tokens=3,
+            ),
+            (
+                {
+                    "parties": [{"name": "Client Corp"}],
+                    "effective_date": "2026-05-27",
+                    "key_obligations": ["Deliver goods"],
+                },
+                10,
+                5,
+            ),
+        ]
+    )
+
+    result = await extraction_service.extract_from_pages(
+        pages=["Bad page", "Good page"],
+        doc_type="contract",
+        strategy=ExtractionStrategy.PAGE_BY_PAGE,
+    )
+
+    assert result.source_pages == [1]
+    assert result.input_tokens == 17
+    assert result.output_tokens == 8
+    assert result.warnings == [
+        "page 0: extraction failed and was skipped"
+    ]
 
 
 @pytest.mark.asyncio
