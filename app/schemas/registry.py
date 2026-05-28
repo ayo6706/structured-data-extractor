@@ -21,10 +21,7 @@ class SchemaRegistry:
     @classmethod
     def get_tool(cls, doc_type: str) -> dict:
         """Returns OpenAI-format tool definition."""
-        if doc_type not in cls._registry:
-            raise KeyError(f"Unknown document type: {doc_type}")
-
-        schema = cls._registry[doc_type]
+        schema = cls.get_schema(doc_type)
         return {
             "type": "function",
             "function": {
@@ -39,11 +36,16 @@ class SchemaRegistry:
     @classmethod
     def validate(cls, doc_type: str, raw: dict) -> BaseModel:
         """Validates raw dict against the schema for doc_type."""
+        schema = cls.get_schema(doc_type)
+        return schema.model_validate(raw)
+
+    @classmethod
+    def get_schema(cls, doc_type: str) -> type[BaseModel]:
+        """Returns the Pydantic schema for a document type."""
         if doc_type not in cls._registry:
             raise KeyError(f"Unknown document type: {doc_type}")
 
-        schema = cls._registry[doc_type]
-        return schema.model_validate(raw)
+        return cls._registry[doc_type]
 
     @classmethod
     def list_types(cls) -> list[str]:
