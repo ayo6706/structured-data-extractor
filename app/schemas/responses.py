@@ -14,7 +14,7 @@ class SchemaListResponse(BaseModel):
 
 
 class ExtractResponse(BaseModel):
-    extraction_id: UUID
+    extraction_id: UUID | None
     doc_type: str
     status: str
     extracted_data: dict[str, Any] | None

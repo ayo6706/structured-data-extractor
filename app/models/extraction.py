@@ -23,8 +23,8 @@ if TYPE_CHECKING:
 class ExtractionStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
-    COMPLETED = "completed"
     PARTIAL = "partial"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 
