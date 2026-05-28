@@ -9,8 +9,8 @@ from app.services.classifier import ClassifierService
 
 def _create_service(content: str = "") -> tuple[ClassifierService, AsyncMock]:
     llm_client = AsyncMock()
-    llm_client.complete.return_value = content
-    return ClassifierService(llm_client=llm_client), llm_client.complete
+    llm_client.generate_text.return_value = content
+    return ClassifierService(llm_client=llm_client), llm_client.generate_text
 
 
 @pytest.mark.asyncio

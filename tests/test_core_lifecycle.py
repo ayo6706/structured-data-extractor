@@ -19,6 +19,7 @@ async def test_startup_checks_database(monkeypatch):
         nonlocal checked
         checked = True
 
+    monkeypatch.setattr(lifecycle, "_validate_llm_api_keys", lambda: None)
     monkeypatch.setattr(lifecycle, "check_database_engine", check_database)
 
     await lifecycle.startup()

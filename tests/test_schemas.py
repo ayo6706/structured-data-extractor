@@ -28,9 +28,10 @@ def test_document_schemas_include_field_descriptions(
 
     assert schema["type"] == "object"
     assert "description" in schema["properties"][field_name]
-    assert "description" in schema["$defs"][nested_definition]["properties"][
-        nested_field
-    ]
+    assert (
+        "description"
+        in schema["$defs"][nested_definition]["properties"][nested_field]
+    )
 
 
 def test_invoice_schema_validation():
