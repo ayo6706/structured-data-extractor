@@ -1,3 +1,7 @@
-from app.integrations.llm.client import LLMClient, LLMClientError
+from app.integrations.llm.client import (
+    LLMClient,
+    LLMClientError,
+    ToolCallResult,
+)
 
-__all__ = ["LLMClient", "LLMClientError"]
+__all__ = ["LLMClient", "LLMClientError", "ToolCallResult"]
