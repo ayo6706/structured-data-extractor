@@ -57,6 +57,17 @@ class LLMConfig(BaseSettings):
     MAX_RETRIES: int = Field(default=2, ge=0, le=10)
 
 
+class LLMAPIKeyConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+    GEMINI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    OPENAI_API_KEY: str | None = None
+
+
 class ArqConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="ARQ_",
