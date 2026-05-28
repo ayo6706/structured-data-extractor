@@ -156,9 +156,7 @@ class PayslipSchema(BaseModel):
             (deduction.amount for deduction in self.deductions),
             start=Decimal("0"),
         )
-        expected_net_pay = normalize_money(
-            self.gross_pay - total_deductions
-        )
+        expected_net_pay = normalize_money(self.gross_pay - total_deductions)
         if normalize_money(self.net_pay) != expected_net_pay:
             raise ValueError(
                 "net_pay must equal gross_pay minus total deductions"
@@ -194,8 +192,6 @@ class ReceiptSchema(BaseModel):
 
         expected_total = normalize_money(self.subtotal + self.tax_amount)
         if normalize_money(self.total_amount) != expected_total:
-            raise ValueError(
-                "total_amount must equal subtotal plus tax_amount"
-            )
+            raise ValueError("total_amount must equal subtotal plus tax_amount")
 
         return self
