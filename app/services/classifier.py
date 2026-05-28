@@ -42,7 +42,7 @@ class ClassifierService:
         )
 
         try:
-            raw = await self.llm_client.complete(
+            raw = await self.llm_client.generate_text(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=25,
