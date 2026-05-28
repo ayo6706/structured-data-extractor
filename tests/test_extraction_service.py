@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import fitz
 import pytest
-from pydantic import ValidationError
 
 from app.core.exceptions import (
     ExtractionError,
@@ -244,7 +243,7 @@ async def test_extract_upload_records_tokens_from_extraction_error(
 
 
 @pytest.mark.asyncio
-async def test_extract_upload_persists_schema_validation_failure(
+async def test_extract_upload_persists_failed_validation_result(
     mock_llm_client: AsyncMock,
 ) -> None:
     db = AsyncMock()
@@ -262,13 +261,12 @@ async def test_extract_upload_persists_schema_validation_failure(
         output_tokens=10,
     )
 
-    with pytest.raises(ValidationError):
-        await service.extract_upload(
-            content=_create_test_pdf("Some contract data"),
-            filename="test.pdf",
-            doc_type="contract",
-            db=db,
-        )
+    response = await service.extract_upload(
+        content=_create_test_pdf("Some contract data"),
+        filename="test.pdf",
+        doc_type="contract",
+        db=db,
+    )
 
     failed_extractions = [
         call.args[0]
@@ -280,6 +278,53 @@ async def test_extract_upload_persists_schema_validation_failure(
     assert failed_extractions[0].raw_tool_output == {
         "invalid_field": "some data"
     }
+    assert failed_extractions[0].warnings
+    assert response.status == "failed"
+    assert response.extracted_data is None
+
+
+@pytest.mark.asyncio
+async def test_extract_upload_returns_result_when_audit_persist_fails(
+    mock_llm_client: AsyncMock,
+) -> None:
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.flush.side_effect = RuntimeError("database down")
+    storage = AsyncMock()
+    storage.save.return_value = "test-id/test.pdf"
+    service = ExtractionService(
+        classifier=AsyncMock(),
+        llm_client=mock_llm_client,
+        storage=storage,
+    )
+    mock_llm_client.call_tool.return_value = ToolCallResult(
+        arguments={
+            "parties": [
+                {"name": "Client Corp", "role": "Client"},
+                {"name": "Vendor Corp", "role": "Vendor"},
+            ],
+            "effective_date": "2026-05-27",
+            "key_obligations": ["Deliver goods"],
+        },
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    response = await service.extract_upload(
+        content=_create_test_pdf("Some contract data"),
+        filename="test.pdf",
+        doc_type="contract",
+        db=db,
+    )
+
+    assert response.extraction_id is None
+    assert response.status == "completed"
+    assert response.extracted_data["effective_date"] == "2026-05-27"
+    assert response.confidence_map["parties"] == 0.85
+    assert any(
+        isinstance(call.args[0], Extraction) for call in db.add.call_args_list
+    )
+    db.rollback.assert_awaited_once()
 
 
 @pytest.mark.asyncio

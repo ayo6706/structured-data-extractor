@@ -5,7 +5,6 @@ from uuid import uuid4
 import pytest
 from fastapi import status
 from httpx import ASGITransport, AsyncClient
-from pydantic import ValidationError
 
 from app.api.dependencies import get_db, get_extraction_service
 from app.core.exceptions import (
@@ -16,7 +15,6 @@ from app.core.exceptions import (
     UnsupportedDocumentTypeError,
 )
 from app.main import app
-from app.schemas.documents import ContractSchema
 from app.schemas.responses import ExtractResponse
 
 
@@ -42,6 +40,7 @@ async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
     extraction_service.extract_upload.return_value = ExtractResponse(
         extraction_id=uuid4(),
         doc_type="contract",
+        status="completed",
         extracted_data={
             "parties": [
                 {"name": "Client Corp", "role": "Client"},
@@ -50,6 +49,9 @@ async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
             "effective_date": "2026-05-27",
             "key_obligations": ["Deliver goods"],
         },
+        confidence_map={"parties": 0.85},
+        warnings=[],
+        model_used="test-model",
         input_tokens=100,
         output_tokens=50,
     )
@@ -67,9 +69,47 @@ async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["doc_type"] == "contract"
+    assert data["status"] == "completed"
+    assert data["confidence_map"] == {"parties": 0.85}
+    assert data["warnings"] == []
+    assert data["model_used"] == "test-model"
     assert data["input_tokens"] == 100
     assert data["output_tokens"] == 50
     extraction_service.extract_upload.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_extract_validation_failed_status(
+    mock_deps: tuple[AsyncMock, AsyncMock],
+) -> None:
+    _, extraction_service = mock_deps
+    extraction_service.extract_upload.return_value = ExtractResponse(
+        extraction_id=None,
+        doc_type="contract",
+        status="failed",
+        extracted_data=None,
+        confidence_map={"parties": 0.0},
+        warnings=["parties: Field required"],
+        model_used="test-model",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/extract",
+            params={"doc_type": "contract"},
+            files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["status"] == "failed"
+    assert data["extraction_id"] is None
+    assert data["warnings"] == ["parties: Field required"]
 
 
 @pytest.mark.asyncio
@@ -99,7 +139,7 @@ async def test_extract_rejects_oversized_upload(
 ) -> None:
     _, extraction_service = mock_deps
     monkeypatch.setattr(
-        "app.api.v1.endpoints.extract.get_app_settings",
+        "app.api.v1.endpoints.extractions.get_app_settings",
         lambda: SimpleNamespace(MAX_UPLOAD_SIZE_BYTES=3),
     )
     transport = ASGITransport(app=app)
@@ -252,27 +292,3 @@ async def test_extract_engine_error(
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     assert "Extraction failed" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_extract_schema_validation_error(
-    mock_deps: tuple[AsyncMock, AsyncMock],
-) -> None:
-    _, extraction_service = mock_deps
-    try:
-        ContractSchema.model_validate({"invalid_field": "some data"})
-    except ValidationError as exc:
-        extraction_service.extract_upload.side_effect = exc
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/api/v1/extract",
-            params={"doc_type": "contract"},
-            files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
-        )
-
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert "schema validation" in response.json()["detail"]

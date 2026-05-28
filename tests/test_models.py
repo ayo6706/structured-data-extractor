@@ -46,6 +46,7 @@ def test_extraction_status_values_match_lifecycle():
     assert [status.value for status in ExtractionStatus] == [
         "pending",
         "processing",
+        "partial",
         "completed",
         "failed",
     ]
