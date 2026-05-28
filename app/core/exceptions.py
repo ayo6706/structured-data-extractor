@@ -5,9 +5,7 @@ class ExtractorError(Exception):
 class UnsupportedDocumentTypeError(ExtractorError):
     """Raised when the document classifier returns 'unknown'."""
 
-    def __init__(
-        self, document_type: str, message: str | None = None
-    ) -> None:
+    def __init__(self, document_type: str, message: str | None = None) -> None:
         self.document_type = document_type
         super().__init__(
             message or f"Unsupported document type: {document_type}"
@@ -17,9 +15,7 @@ class UnsupportedDocumentTypeError(ExtractorError):
 class PDFParseError(ExtractorError):
     """Raised when PyMuPDF fails to extract text."""
 
-    def __init__(
-        self, file_path: str, original_exception: Exception
-    ) -> None:
+    def __init__(self, file_path: str, original_exception: Exception) -> None:
         self.file_path = file_path
         self.original_exception = original_exception
         super().__init__(
@@ -37,8 +33,7 @@ class StorageError(ExtractorError):
         self.operation = operation
         self.original_exception = original_exception
         super().__init__(
-            f"Failed to {operation} storage path {path}: "
-            f"{original_exception}"
+            f"Failed to {operation} storage path {path}: {original_exception}"
         )
 
 
@@ -51,3 +46,20 @@ class ClassificationError(ExtractorError):
         self.original_exception = original_exception
         super().__init__(message)
 
+
+class ExtractionError(ExtractorError):
+    """Raised when structured data extraction fails after retries."""
+
+    def __init__(
+        self,
+        message: str,
+        attempts: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        original_exception: Exception | None = None,
+    ) -> None:
+        self.attempts = attempts
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.original_exception = original_exception
+        super().__init__(message)
