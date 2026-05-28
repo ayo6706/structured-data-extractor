@@ -1,8 +1,9 @@
 import logging
-from typing import Annotated
+from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
-from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import DbDep, ExtractionDep
 from app.core.config import get_app_settings
@@ -13,17 +14,23 @@ from app.core.exceptions import (
     StorageError,
     UnsupportedDocumentTypeError,
 )
+from app.models.extraction import Extraction, ExtractionStatus
+from app.repositories.extractions import get_extraction as get_extraction_row
 from app.schemas.registry import SchemaRegistry
-from app.schemas.responses import ExtractResponse
+from app.schemas.responses import (
+    ExtractionAuditResponse,
+    ExtractionResponse,
+    ExtractResponse,
+)
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/extract", tags=["extraction"])
+router = APIRouter(tags=["extractions"])
 PDF_CONTENT_TYPE = "application/pdf"
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
-@router.post("", response_model=ExtractResponse)
+@router.post("/extract", response_model=ExtractResponse)
 async def extract_document(
     file: UploadFile,
     db: DbDep,
@@ -102,12 +109,94 @@ async def extract_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Extraction failed: {exc}",
         ) from exc
-    except ValidationError as exc:
-        logger.error("Schema validation failed: %s", exc)
+
+
+@router.get("/extractions/{extraction_id}", response_model=ExtractionResponse)
+async def get_extraction(
+    extraction_id: UUID,
+    db: DbDep,
+) -> ExtractionResponse:
+    extraction = await _get_extraction_or_404(db, extraction_id)
+    return _to_response(extraction)
+
+
+@router.get(
+    "/extractions/{extraction_id}/audit",
+    response_model=ExtractionAuditResponse,
+)
+async def get_extraction_audit(
+    extraction_id: UUID,
+    db: DbDep,
+) -> ExtractionAuditResponse:
+    extraction = await _get_extraction_or_404(db, extraction_id)
+    return _to_audit_response(extraction)
+
+
+async def _get_extraction_or_404(
+    db: AsyncSession,
+    extraction_id: UUID,
+) -> Extraction:
+    extraction = await get_extraction_row(db, extraction_id)
+    if extraction is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Extracted data failed schema validation: {exc}",
-        ) from exc
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extraction not found",
+        )
+
+    return extraction
+
+
+def _to_response(extraction: Extraction) -> ExtractionResponse:
+    return ExtractionResponse(
+        extraction_id=extraction.id,
+        document_id=extraction.document_id,
+        doc_type=extraction.doc_type,
+        status=_status_value(extraction.status),
+        extracted_data=extraction.extracted_data,
+        confidence_map=_float_map(extraction.confidence_map),
+        warnings=extraction.warnings or [],
+        model_used=extraction.model_used,
+        input_tokens=extraction.input_tokens,
+        output_tokens=extraction.output_tokens,
+        extraction_duration_ms=extraction.extraction_duration_ms,
+    )
+
+
+def _to_audit_response(extraction: Extraction) -> ExtractionAuditResponse:
+    return ExtractionAuditResponse(
+        extraction_id=extraction.id,
+        document_id=extraction.document_id,
+        doc_type=extraction.doc_type,
+        status=_status_value(extraction.status),
+        extracted_data=extraction.extracted_data,
+        confidence_map=_float_map(extraction.confidence_map),
+        warnings=extraction.warnings or [],
+        model_used=extraction.model_used,
+        input_tokens=extraction.input_tokens,
+        output_tokens=extraction.output_tokens,
+        extraction_duration_ms=extraction.extraction_duration_ms,
+        raw_tool_output=extraction.raw_tool_output,
+        strategy=extraction.strategy,
+        source_pages=extraction.source_pages,
+    )
+
+
+def _float_map(value: dict[str, Any] | None) -> dict[str, float]:
+    scores = {}
+    for key, score in (value or {}).items():
+        try:
+            scores[key] = float(score)
+        except (TypeError, ValueError):
+            scores[key] = 0.0
+
+    return scores
+
+
+def _status_value(status: ExtractionStatus | str) -> str:
+    if isinstance(status, ExtractionStatus):
+        return status.value
+
+    return status
 
 
 def _is_pdf_upload(file: UploadFile) -> bool:
