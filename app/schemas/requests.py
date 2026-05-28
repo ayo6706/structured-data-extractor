@@ -1,8 +1,14 @@
-from typing import Literal
+from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.registry import SchemaRegistry
+
+
+class ExtractionStrategy(StrEnum):
+    FULL = "full"
+    PAGE_BY_PAGE = "page_by_page"
+    SMART = "smart"
 
 
 class ExtractRequest(BaseModel):
@@ -16,7 +22,7 @@ class ExtractRequest(BaseModel):
         None,
         description="Optional registered document type to skip classification",
     )
-    strategy: Literal["full", "page_by_page", "smart"] | None = Field(
+    strategy: ExtractionStrategy | None = Field(
         None, description="Optional extraction strategy"
     )
 
