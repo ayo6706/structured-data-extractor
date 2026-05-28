@@ -16,6 +16,7 @@ from app.core.exceptions import (
 )
 from app.models.extraction import Extraction, ExtractionStatus
 from app.repositories.extractions import get_extraction as get_extraction_row
+from app.schemas.requests import ExtractionStrategy
 from app.schemas.registry import SchemaRegistry
 from app.schemas.responses import (
     ExtractionAuditResponse,
@@ -43,6 +44,10 @@ async def extract_document(
             )
         ),
     ] = None,
+    strategy: Annotated[
+        ExtractionStrategy | None,
+        Query(description="Optional extraction strategy"),
+    ] = None,
 ) -> ExtractResponse:
     if not _is_pdf_upload(file):
         await file.close()
@@ -62,6 +67,7 @@ async def extract_document(
             content=content,
             filename=filename,
             doc_type=doc_type,
+            strategy=strategy,
             db=db,
         )
     except PDFParseError as exc:
