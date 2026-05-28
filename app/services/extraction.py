@@ -4,7 +4,6 @@ from typing import Final
 from uuid import uuid4
 
 import anyio
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import llm_settings
@@ -14,12 +13,15 @@ from app.core.exceptions import (
 )
 from app.infrastructure.storage import StorageBackend
 from app.integrations.llm.client import LLMClient, LLMClientError
+from app.lib.confidence import score_confidence_map
 from app.lib.pdf import parse_pdf
 from app.models.document import Document, DocumentStatus
 from app.models.extraction import Extraction, ExtractionStatus
+from app.repositories.extractions import create_extraction
 from app.schemas.registry import SchemaRegistry
 from app.schemas.responses import ExtractResponse
 from app.services.classifier import ClassifierService
+from app.services.validation import validate_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -134,53 +136,55 @@ class ExtractionService:
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
+            validation = validate_extraction(resolved_type, raw_extracted)
+            confidence_map = score_confidence_map(
+                doc_type=resolved_type,
+                extracted_data=validation.extracted_data,
+            )
+
+            db_document.status = (
+                DocumentStatus.FAILED
+                if validation.status == ExtractionStatus.FAILED
+                else DocumentStatus.COMPLETED
+            )
+            db.add(db_document)
+            await db.commit()
+
+            db_extraction = None
             try:
-                validated_model = SchemaRegistry.validate(
-                    resolved_type, raw_extracted
-                )
-                extracted_data = validated_model.model_dump(mode="json")
-            except ValidationError:
-                db_extraction = Extraction(
+                db_extraction = await create_extraction(
+                    db,
                     document_id=doc_id,
                     doc_type=resolved_type,
-                    status=ExtractionStatus.FAILED,
+                    status=validation.status,
+                    extracted_data=validation.extracted_data,
+                    confidence_map=confidence_map,
+                    warnings=validation.warnings,
                     raw_tool_output=raw_extracted,
-                    strategy="full",
                     model_used=self.model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     extraction_duration_ms=duration_ms,
+                    source_pages=list(range(parsed_pdf.page_count)),
+                    strategy="full",
                 )
-                db.add(db_extraction)
-                failure_record_committed = await self._mark_document_failed(
-                    db, db_document
-                )
-                raise
-
-            db_extraction = Extraction(
-                document_id=doc_id,
-                doc_type=resolved_type,
-                status=ExtractionStatus.COMPLETED,
-                extracted_data=extracted_data,
-                raw_tool_output=raw_extracted,
-                strategy="full",
-                source_pages=list(range(parsed_pdf.page_count)),
-                model_used=self.model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                extraction_duration_ms=duration_ms,
-            )
-            db.add(db_extraction)
-
-            db_document.status = DocumentStatus.COMPLETED
-            db.add(db_document)
-            await db.commit()
-            await db.refresh(db_extraction)
+                await db.commit()
+                await db.refresh(db_extraction)
+            except Exception as exc:
+                await db.rollback()
+                db_extraction = None
+                logger.error("Failed to persist extraction audit: %s", exc)
 
             return ExtractResponse(
-                extraction_id=db_extraction.id,
+                extraction_id=db_extraction.id
+                if db_extraction is not None
+                else None,
                 doc_type=resolved_type,
-                extracted_data=extracted_data,
+                status=validation.status.value,
+                extracted_data=validation.extracted_data,
+                confidence_map=confidence_map,
+                warnings=validation.warnings,
+                model_used=self.model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
             )
