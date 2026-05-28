@@ -2,12 +2,15 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
+from pydantic import ValidationError
 
-from app.api.dependencies import ExtractDep
+from app.api.dependencies import DbDep, ExtractionDep
 from app.core.config import get_app_settings
 from app.core.exceptions import (
     ClassificationError,
+    ExtractionError,
     PDFParseError,
+    StorageError,
     UnsupportedDocumentTypeError,
 )
 from app.schemas.registry import SchemaRegistry
@@ -23,7 +26,8 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 @router.post("", response_model=ExtractResponse)
 async def extract_document(
     file: UploadFile,
-    extract_service: ExtractDep,
+    db: DbDep,
+    extraction_service: ExtractionDep,
     doc_type: Annotated[
         str | None,
         Query(
@@ -40,26 +44,34 @@ async def extract_document(
             detail="Only PDF uploads are supported",
         )
 
+    filename = file.filename or "uploaded.pdf"
     content = await _read_upload_file(
         file,
         max_size=get_app_settings().MAX_UPLOAD_SIZE_BYTES,
     )
 
     try:
-        resolved_type = await extract_service.resolve_doc_type(
+        return await extraction_service.extract_upload(
             content=content,
-            filename=file.filename or "uploaded.pdf",
+            filename=filename,
             doc_type=doc_type,
+            db=db,
         )
     except PDFParseError as exc:
         logger.debug(
             "PDF parsing failed for %s: %s",
-            file.filename,
+            filename,
             exc.original_exception,
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not parse PDF",
+        ) from exc
+    except StorageError as exc:
+        logger.error("Failed to save uploaded file: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save uploaded file to storage",
         ) from exc
     except ClassificationError as exc:
         logger.error("Classification failed: %s", exc)
@@ -84,8 +96,18 @@ async def extract_document(
                 f"Supported types: {SchemaRegistry.list_types()}"
             ),
         ) from exc
-
-    return ExtractResponse(doc_type=resolved_type)
+    except ExtractionError as exc:
+        logger.error("Extraction failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Extraction failed: {exc}",
+        ) from exc
+    except ValidationError as exc:
+        logger.error("Schema validation failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Extracted data failed schema validation: {exc}",
+        ) from exc
 
 
 def _is_pdf_upload(file: UploadFile) -> bool:
