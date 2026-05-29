@@ -37,6 +37,14 @@ class StorageError(ExtractorError):
         )
 
 
+class DocumentNotFoundError(ExtractorError):
+    """Raised when a requested document row does not exist."""
+
+    def __init__(self, document_id: object) -> None:
+        self.document_id = document_id
+        super().__init__(f"Document {document_id} not found")
+
+
 class ClassificationError(ExtractorError):
     """Raised when the LLM classification call fails."""
 
