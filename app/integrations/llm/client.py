@@ -12,8 +12,15 @@ class LLMClientError(Exception):
 
 
 @dataclass
+class TextCompletionResult:
+    content: str
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
 class ToolCallResult:
-    arguments: dict[str, Any]
+    arguments: dict[str, Any] | None
     input_tokens: int
     output_tokens: int
 
@@ -26,7 +33,7 @@ class LLMClient(ABC):
         model: str,
         messages: list[dict[str, str]],
         max_tokens: int,
-    ) -> str:
+    ) -> TextCompletionResult:
         pass
 
     @abstractmethod
@@ -43,8 +50,10 @@ class LLMClient(ABC):
         """Sends a system and user message pair, forcing a tool call.
 
         Returns:
-            ToolCallResult: Parsed arguments and token usage.
-            None: If the model responds with prose (no tool call).
+            ToolCallResult: Parsed arguments and token usage. Arguments are
+                None if the provider returns no tool call.
+            None: Supported for test doubles and alternate clients that cannot
+                report usage for prose responses.
 
         Raises:
             LLMClientError: If completion or parsing fails.
