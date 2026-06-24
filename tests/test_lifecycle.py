@@ -25,7 +25,7 @@ def test_validate_llm_api_keys_gemini_missing(
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
-        lifecycle._validate_llm_api_keys(LLMAPIKeyConfig(_env_file=None))
+        lifecycle.validate_llm_api_keys(LLMAPIKeyConfig(_env_file=None))
 
 
 def test_validate_llm_api_keys_gemini_present(
@@ -33,7 +33,7 @@ def test_validate_llm_api_keys_gemini_present(
 ) -> None:
     _set_models(monkeypatch, extraction_model="gemini/gemini-2.5-flash")
 
-    lifecycle._validate_llm_api_keys(
+    lifecycle.validate_llm_api_keys(
         LLMAPIKeyConfig(_env_file=None, GEMINI_API_KEY="x")
     )
 
@@ -52,7 +52,7 @@ def test_validate_llm_api_keys_gemini_present_in_env_file(
         lambda: LLMAPIKeyConfig(_env_file=env_file),
     )
 
-    lifecycle._validate_llm_api_keys()
+    lifecycle.validate_llm_api_keys()
 
 
 def test_validate_llm_api_keys_anthropic_missing(
@@ -62,7 +62,7 @@ def test_validate_llm_api_keys_anthropic_missing(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
-        lifecycle._validate_llm_api_keys(LLMAPIKeyConfig(_env_file=None))
+        lifecycle.validate_llm_api_keys(LLMAPIKeyConfig(_env_file=None))
 
 
 def test_validate_llm_api_keys_openai_missing(
@@ -72,4 +72,4 @@ def test_validate_llm_api_keys_openai_missing(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        lifecycle._validate_llm_api_keys(LLMAPIKeyConfig(_env_file=None))
+        lifecycle.validate_llm_api_keys(LLMAPIKeyConfig(_env_file=None))

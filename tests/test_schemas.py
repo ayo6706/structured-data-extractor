@@ -9,6 +9,7 @@ from app.schemas.documents import (
     PayslipSchema,
     ReceiptSchema,
 )
+from app.schemas.registry import SchemaRegistry
 from app.schemas.requests import ExtractRequest
 
 
@@ -32,6 +33,25 @@ def test_document_schemas_include_field_descriptions(
         "description"
         in schema["$defs"][nested_definition]["properties"][nested_field]
     )
+
+
+@pytest.mark.parametrize("schema_class", SchemaRegistry._registry.values())
+def test_all_schema_fields_include_descriptions(schema_class) -> None:
+    schema = schema_class.model_json_schema()
+
+    for field_name, field_schema in schema["properties"].items():
+        assert "description" in field_schema, field_name
+
+
+@pytest.mark.parametrize("schema_class", SchemaRegistry._registry.values())
+def test_nested_schema_fields_include_descriptions(schema_class) -> None:
+    schema = schema_class.model_json_schema()
+
+    for definition_name, definition in schema.get("$defs", {}).items():
+        for field_name, field_schema in definition["properties"].items():
+            assert "description" in field_schema, (
+                f"{definition_name}.{field_name}"
+            )
 
 
 def test_invoice_schema_validation():
@@ -72,7 +92,7 @@ def test_invoice_schema_invalid_data():
     assert "invoice_date" in error_fields
 
 
-def test_invoice_schema_rejects_inconsistent_dates_and_totals():
+def test_invoice_schema_rejects_inconsistent_dates():
     valid_data = {
         "vendor_name": "Test Vendor",
         "invoice_number": "INV-001",
@@ -80,7 +100,7 @@ def test_invoice_schema_rejects_inconsistent_dates_and_totals():
         "due_date": "2026-05-25",
         "subtotal": "100.00",
         "tax_amount": "20.00",
-        "total_amount": "119.00",
+        "total_amount": "120.00",
         "currency": "USD",
         "line_items": [],
     }
@@ -101,36 +121,38 @@ def test_contract_schema_rejects_invalid_termination_date():
         )
 
 
-def test_payslip_schema_rejects_invalid_net_pay():
-    with pytest.raises(ValidationError):
-        PayslipSchema.model_validate(
-            {
-                "employee_name": "Ada",
-                "employer_name": "Acme",
-                "pay_period_start": "2026-05-01",
-                "pay_period_end": "2026-05-31",
-                "gross_pay": "1000.00",
-                "net_pay": "900.00",
-                "currency": "USD",
-                "deductions": [{"name": "Tax", "amount": "50.00"}],
-                "pay_date": "2026-05-31",
-            }
-        )
+def test_payslip_schema_accepts_net_pay_adjustments():
+    model = PayslipSchema.model_validate(
+        {
+            "employee_name": "Ada",
+            "employer_name": "Acme",
+            "pay_period_start": "2026-05-01",
+            "pay_period_end": "2026-05-31",
+            "gross_pay": "1000.00",
+            "net_pay": "900.00",
+            "currency": "USD",
+            "deductions": [{"name": "Tax", "amount": "50.00"}],
+            "pay_date": "2026-05-31",
+        }
+    )
+
+    assert model.net_pay == Decimal("900.00")
 
 
-def test_receipt_schema_rejects_inconsistent_total():
-    with pytest.raises(ValidationError):
-        ReceiptSchema.model_validate(
-            {
-                "merchant_name": "Store",
-                "receipt_date": "2026-05-26",
-                "items": [],
-                "subtotal": "10.00",
-                "tax_amount": "1.00",
-                "total_amount": "10.50",
-                "currency": "USD",
-            }
-        )
+def test_receipt_schema_accepts_total_adjustments():
+    model = ReceiptSchema.model_validate(
+        {
+            "merchant_name": "Store",
+            "receipt_date": "2026-05-26",
+            "items": [],
+            "subtotal": "10.00",
+            "tax_amount": "1.00",
+            "total_amount": "10.50",
+            "currency": "USD",
+        }
+    )
+
+    assert model.total_amount == Decimal("10.50")
 
 
 def test_extract_request_restricts_strategy_and_doc_type():

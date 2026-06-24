@@ -45,6 +45,39 @@ class DocumentNotFoundError(ExtractorError):
         super().__init__(f"Document {document_id} not found")
 
 
+class ExtractionNotFoundError(ExtractorError):
+    """Raised when a requested extraction row does not exist."""
+
+    def __init__(self, extraction_id: object) -> None:
+        self.extraction_id = extraction_id
+        super().__init__(f"Extraction {extraction_id} not found")
+
+
+class InvalidDocumentTypeError(ExtractorError):
+    def __init__(self, document_type: str, available_types: list[str]) -> None:
+        self.document_type = document_type
+        self.available_types = available_types
+        super().__init__(f"Invalid document type: {document_type}")
+
+
+class InvalidUploadError(ExtractorError):
+    pass
+
+
+class UploadTooLargeError(ExtractorError):
+    pass
+
+
+class InvalidBatchError(ExtractorError):
+    pass
+
+
+class CorrectionValidationError(ExtractorError):
+    def __init__(self, warnings: list[str]) -> None:
+        self.warnings = warnings
+        super().__init__("Correction does not contain valid schema fields")
+
+
 class ClassificationError(ExtractorError):
     """Raised when the LLM classification call fails."""
 

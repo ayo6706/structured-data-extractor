@@ -4,15 +4,14 @@ from uuid import uuid4
 import pytest
 
 from app.models.extraction import Extraction, ExtractionStatus
-from app.repositories.extractions import create_extraction, get_extraction
+from app.repositories.extractions import ExtractionRepository
 
 
 @pytest.mark.asyncio
 async def test_audit_persists_extraction() -> None:
     db = AsyncMock()
     db.add = MagicMock()
-    extraction = await create_extraction(
-        db,
+    extraction = await ExtractionRepository(db).create_from_fields(
         document_id=uuid4(),
         doc_type="invoice",
         status=ExtractionStatus.COMPLETED,
@@ -52,6 +51,6 @@ async def test_audit_get_returns_extraction() -> None:
     db = AsyncMock()
     db.execute.return_value = result
 
-    extraction = await get_extraction(db, expected.id)
+    extraction = await ExtractionRepository(db).get_by_id(expected.id)
 
     assert extraction == expected

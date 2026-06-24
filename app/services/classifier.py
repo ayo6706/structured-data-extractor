@@ -1,11 +1,12 @@
 import logging
-import re
 from typing import Final
 
 from app.core.config import llm_settings
 from app.core.exceptions import ClassificationError
 from app.integrations.llm.client import LLMClient, LLMClientError
+from app.models.llm_usage import LLMUsagePurpose
 from app.schemas.registry import SchemaRegistry
+from app.services.types import ClassificationResult, LLMUsageEvent
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class ClassifierService:
         self.llm_client = llm_client
         self.model = model
 
-    async def classify(self, first_page_text: str) -> str:
+    async def classify(self, first_page_text: str) -> ClassificationResult:
         valid_types = SchemaRegistry.list_types()
         valid_type_map = {
             doc_type.lower(): doc_type for doc_type in valid_types
@@ -42,7 +43,7 @@ class ClassifierService:
         )
 
         try:
-            raw = await self.llm_client.generate_text(
+            completion = await self.llm_client.generate_text(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=25,
@@ -53,16 +54,21 @@ class ClassifierService:
                 original_exception=exc,
             ) from exc
 
-        normalized = raw.strip().lower()
+        usage = LLMUsageEvent(
+            purpose=LLMUsagePurpose.CLASSIFIER,
+            model=self.model,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+        )
+        normalized = completion.content.strip().lower()
 
         if normalized == UNKNOWN_DOC_TYPE:
-            return UNKNOWN_DOC_TYPE
+            return ClassificationResult(doc_type=UNKNOWN_DOC_TYPE, usage=usage)
 
         if normalized in valid_type_map:
-            return valid_type_map[normalized]
+            return ClassificationResult(
+                doc_type=valid_type_map[normalized],
+                usage=usage,
+            )
 
-        for lower_doc_type, registered_doc_type in valid_type_map.items():
-            if re.search(rf"\b{re.escape(lower_doc_type)}\b", normalized):
-                return registered_doc_type
-
-        return UNKNOWN_DOC_TYPE
+        return ClassificationResult(doc_type=UNKNOWN_DOC_TYPE, usage=usage)

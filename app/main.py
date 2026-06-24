@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.exception_handlers import register_exception_handlers
 from app.api.v1.router import api_router
 from app.core import lifecycle
 from app.core.config import get_app_settings
@@ -17,13 +18,13 @@ settings = get_app_settings()
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("%s starting up.", settings.PROJECT_NAME)
 
-    await lifecycle.startup()
+    await lifecycle.startup(app)
 
     try:
         yield
     finally:
         logger.info("%s shutting down.", settings.PROJECT_NAME)
-        await lifecycle.shutdown()
+        await lifecycle.shutdown(app)
 
 
 app = FastAPI(
@@ -41,4 +42,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+register_exception_handlers(app)
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

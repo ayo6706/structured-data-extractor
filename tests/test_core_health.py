@@ -11,7 +11,7 @@ class RecordingConnection:
     def __init__(self) -> None:
         self.executed = False
 
-    async def execute(self, query) -> None:
+    async def execute(self, _query) -> None:
         self.executed = True
 
 

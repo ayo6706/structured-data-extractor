@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,3 +37,19 @@ class ExtractRequest(BaseModel):
             raise ValueError(f"Unsupported document type: {value}")
 
         return value
+
+
+class CorrectionRequest(BaseModel):
+    corrected_data: dict[str, Any] = Field(
+        description="Human-corrected extraction fields"
+    )
+    corrected_by: str | None = Field(
+        None,
+        max_length=255,
+        description="Optional reviewer identifier",
+    )
+    note: str | None = Field(
+        None,
+        max_length=1000,
+        description="Optional correction note",
+    )

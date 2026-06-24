@@ -6,10 +6,12 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
 from app.core.config import get_app_settings, get_database_url
+from app.models.correction import ExtractionCorrection
 from app.models.document import Document
 from app.models.extraction import Extraction
+from app.models.llm_usage import LLMUsage
 
-models = (Document, Extraction)
+models = (Document, Extraction, ExtractionCorrection, LLMUsage)
 settings = get_app_settings()
 
 config = context.config

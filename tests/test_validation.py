@@ -111,7 +111,7 @@ def test_validation_fails_when_no_schema_fields_are_valid() -> None:
     assert result.warnings
 
 
-def test_validation_fails_model_level_invariant_errors() -> None:
+def test_validation_warns_for_invoice_total_quality_mismatch() -> None:
     result = validate_extraction(
         "invoice",
         {
@@ -128,8 +128,50 @@ def test_validation_fails_model_level_invariant_errors() -> None:
         },
     )
 
-    assert result.status == ExtractionStatus.FAILED
-    assert result.extracted_data is None
+    assert result.status == ExtractionStatus.COMPLETED
+    assert result.extracted_data["vendor_name"] == "Acme Corp"
+    assert result.extracted_data["invoice_number"] == "INV-1"
+    assert result.extracted_data["total_amount"] == "1500.00"
+    assert any("total_amount" in warning for warning in result.warnings)
+
+
+def test_validation_warns_for_payslip_net_pay_quality_mismatch() -> None:
+    result = validate_extraction(
+        "payslip",
+        {
+            "employee_name": "Ada",
+            "employer_name": "Acme",
+            "pay_period_start": "2026-05-01",
+            "pay_period_end": "2026-05-31",
+            "gross_pay": "1000.00",
+            "net_pay": "900.00",
+            "currency": "USD",
+            "deductions": [{"name": "Tax", "amount": "50.00"}],
+            "pay_date": "2026-05-31",
+        },
+    )
+
+    assert result.status == ExtractionStatus.COMPLETED
+    assert result.extracted_data["net_pay"] == "900.00"
+    assert any("net_pay" in warning for warning in result.warnings)
+
+
+def test_validation_warns_for_receipt_total_quality_mismatch() -> None:
+    result = validate_extraction(
+        "receipt",
+        {
+            "merchant_name": "Store",
+            "receipt_date": "2026-05-26",
+            "items": [],
+            "subtotal": "10.00",
+            "tax_amount": "1.00",
+            "total_amount": "10.50",
+            "currency": "USD",
+        },
+    )
+
+    assert result.status == ExtractionStatus.COMPLETED
+    assert result.extracted_data["total_amount"] == "10.50"
     assert any("total_amount" in warning for warning in result.warnings)
 
 

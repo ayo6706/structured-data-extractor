@@ -7,6 +7,12 @@ from typing import Any, Union, get_args, get_origin
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.models.extraction import ExtractionStatus
+from app.schemas.documents import (
+    InvoiceSchema,
+    PayslipSchema,
+    ReceiptSchema,
+    normalize_money,
+)
 from app.schemas.registry import SchemaRegistry
 
 
@@ -28,7 +34,7 @@ class _ExtractionValidator:
 
         return ValidationResult(
             extracted_data=model.model_dump(mode="json"),
-            warnings=[],
+            warnings=self._quality_warnings(model),
             status=ExtractionStatus.COMPLETED,
         )
 
@@ -39,13 +45,6 @@ class _ExtractionValidator:
         exc: ValidationError,
     ) -> ValidationResult:
         warnings = self._warnings(schema, raw, exc)
-        if self._has_model_errors(exc):
-            return ValidationResult(
-                extracted_data=None,
-                warnings=warnings,
-                status=ExtractionStatus.FAILED,
-            )
-
         invalid_fields = self._invalid_fields(exc)
         values: dict[str, Any] = {}
         valid_field_count = 0
@@ -67,13 +66,82 @@ class _ExtractionValidator:
             if valid_field_count > 0
             else ExtractionStatus.FAILED
         )
-        data = schema.model_construct(**values).model_dump(mode="json")
+        model = schema.model_construct(**values)
+        data = model.model_dump(mode="json")
 
         return ValidationResult(
             extracted_data=data if valid_field_count > 0 else None,
-            warnings=warnings,
+            warnings=warnings + self._quality_warnings(model),
             status=status,
         )
+
+    def _quality_warnings(self, model: BaseModel) -> list[str]:
+        if isinstance(model, InvoiceSchema):
+            return self._invoice_warnings(model)
+        if isinstance(model, PayslipSchema):
+            return self._payslip_warnings(model)
+        if isinstance(model, ReceiptSchema):
+            return self._receipt_warnings(model)
+
+        return []
+
+    @staticmethod
+    def _invoice_warnings(model: InvoiceSchema) -> list[str]:
+        if (
+            model.subtotal is None
+            or model.tax_amount is None
+            or model.total_amount is None
+        ):
+            return []
+
+        expected_total = normalize_money(model.subtotal + model.tax_amount)
+        if normalize_money(model.total_amount) == expected_total:
+            return []
+
+        return [
+            "total_amount: does not equal subtotal plus tax_amount; "
+            "document may include discounts, shipping, credits, or rounding"
+        ]
+
+    @staticmethod
+    def _payslip_warnings(model: PayslipSchema) -> list[str]:
+        if (
+            model.gross_pay is None
+            or model.net_pay is None
+            or model.deductions is None
+        ):
+            return []
+
+        total_deductions = sum(
+            (deduction.amount for deduction in model.deductions),
+            start=Decimal("0"),
+        )
+        expected_net_pay = normalize_money(model.gross_pay - total_deductions)
+        if normalize_money(model.net_pay) == expected_net_pay:
+            return []
+
+        return [
+            "net_pay: does not equal gross_pay minus visible deductions; "
+            "document may omit deductions or include adjustments"
+        ]
+
+    @staticmethod
+    def _receipt_warnings(model: ReceiptSchema) -> list[str]:
+        if (
+            model.subtotal is None
+            or model.tax_amount is None
+            or model.total_amount is None
+        ):
+            return []
+
+        expected_total = normalize_money(model.subtotal + model.tax_amount)
+        if normalize_money(model.total_amount) == expected_total:
+            return []
+
+        return [
+            "total_amount: does not equal subtotal plus tax_amount; "
+            "receipt may include discounts, fees, credits, or rounding"
+        ]
 
     @staticmethod
     def _invalid_fields(exc: ValidationError) -> set[str]:
@@ -83,10 +151,6 @@ class _ExtractionValidator:
             if loc and isinstance(loc[0], str):
                 fields.add(loc[0])
         return fields
-
-    @staticmethod
-    def _has_model_errors(exc: ValidationError) -> bool:
-        return any(not error["loc"] for error in exc.errors())
 
     @classmethod
     def _recovery_input(
@@ -119,9 +183,7 @@ class _ExtractionValidator:
         try:
             model = schema.model_validate(candidate)
         except ValidationError:
-            return TypeAdapter(field_info.annotation).validate_python(
-                raw_value
-            )
+            return TypeAdapter(field_info.annotation).validate_python(raw_value)
 
         return getattr(model, field_name)
 

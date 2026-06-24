@@ -75,13 +75,6 @@ class InvoiceSchema(BaseModel):
         if self.due_date is not None and self.due_date < self.invoice_date:
             raise ValueError("due_date must be on or after invoice_date")
 
-        if self.tax_amount is not None:
-            expected_total = normalize_money(self.subtotal + self.tax_amount)
-            if normalize_money(self.total_amount) != expected_total:
-                raise ValueError(
-                    "total_amount must equal subtotal plus tax_amount"
-                )
-
         return self
 
 
@@ -152,16 +145,6 @@ class PayslipSchema(BaseModel):
                 "pay_period_end must be on or after pay_period_start"
             )
 
-        total_deductions = sum(
-            (deduction.amount for deduction in self.deductions),
-            start=Decimal("0"),
-        )
-        expected_net_pay = normalize_money(self.gross_pay - total_deductions)
-        if normalize_money(self.net_pay) != expected_net_pay:
-            raise ValueError(
-                "net_pay must equal gross_pay minus total deductions"
-            )
-
         return self
 
 
@@ -187,11 +170,4 @@ class ReceiptSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_total(self) -> Self:
-        if self.subtotal is None or self.tax_amount is None:
-            return self
-
-        expected_total = normalize_money(self.subtotal + self.tax_amount)
-        if normalize_money(self.total_amount) != expected_total:
-            raise ValueError("total_amount must equal subtotal plus tax_amount")
-
         return self

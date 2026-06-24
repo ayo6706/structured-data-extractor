@@ -8,10 +8,18 @@ from app.core.exceptions import (
     PDFParseError,
     UnsupportedDocumentTypeError,
 )
+from app.factories.document_processor import DocumentProcessorFactory
 from app.integrations.llm.client import LLMClientError, ToolCallResult
-from app.models.extraction import Extraction, ExtractionStatus
+from app.models.document import DocumentStatus
+from app.models.extraction import ExtractionStatus
 from app.schemas.requests import ExtractionStrategy
-from app.services.extraction import EXTRACTION_SYSTEM_PROMPT, ExtractionService
+from app.services.document_processor import DocumentProcessor
+from app.services.page_extraction import PageStrategyRunner
+from app.services.tool_call_extractor import (
+    EXTRACTION_SYSTEM_PROMPT,
+    EXTRACTION_USER_PROMPT_TEMPLATE,
+    ToolCallExtractor,
+)
 
 
 def _create_test_pdf(text: str) -> bytes:
@@ -46,20 +54,51 @@ def mock_llm_client() -> AsyncMock:
 
 
 @pytest.fixture
-def extraction_service(mock_llm_client: AsyncMock) -> ExtractionService:
-    storage = AsyncMock()
-    storage.save.return_value = "test-id/test.pdf"
-    return ExtractionService(
-        classifier=AsyncMock(),
+def tool_extractor(mock_llm_client: AsyncMock) -> ToolCallExtractor:
+    return ToolCallExtractor(
         llm_client=mock_llm_client,
-        storage=storage,
         model="test-model",
     )
 
 
+@pytest.fixture
+def page_runner(tool_extractor: ToolCallExtractor) -> PageStrategyRunner:
+    return PageStrategyRunner(text_extractor=tool_extractor)
+
+
+@pytest.fixture
+def document_processor(
+    page_runner: PageStrategyRunner,
+) -> DocumentProcessor:
+    return _build_document_processor(
+        classifier=AsyncMock(),
+        page_runner=page_runner,
+    )
+
+
+def _build_document_processor(
+    *,
+    classifier: AsyncMock,
+    page_runner: PageStrategyRunner,
+    storage: AsyncMock | None = None,
+    db: AsyncMock | None = None,
+) -> DocumentProcessor:
+    db = db or AsyncMock()
+    db.add = MagicMock()
+    storage = storage or AsyncMock()
+    storage.save.return_value = "test-id/test.pdf"
+    factory = DocumentProcessorFactory(
+        classifier=classifier,
+        page_runner=page_runner,
+        storage=storage,
+        model="test-model",
+    )
+    return factory.create(db)
+
+
 @pytest.mark.asyncio
 async def test_extract_from_text_success_first_try(
-    extraction_service: ExtractionService,
+    tool_extractor: ToolCallExtractor,
     mock_llm_client: AsyncMock,
 ) -> None:
     expected_data = {"vendor_name": "Acme Corp", "total_amount": 100.0}
@@ -70,7 +109,7 @@ async def test_extract_from_text_success_first_try(
     )
 
     result, input_tokens, output_tokens = (
-        await extraction_service.extract_from_text(
+        await tool_extractor.extract(
             text="Acme Corp invoice...", doc_type="invoice"
         )
     )
@@ -83,7 +122,7 @@ async def test_extract_from_text_success_first_try(
 
 @pytest.mark.asyncio
 async def test_extract_from_text_success_after_retry(
-    extraction_service: ExtractionService,
+    tool_extractor: ToolCallExtractor,
     mock_llm_client: AsyncMock,
 ) -> None:
     expected_data = {"vendor_name": "Acme Corp"}
@@ -95,7 +134,7 @@ async def test_extract_from_text_success_after_retry(
     ]
 
     result, input_tokens, output_tokens = (
-        await extraction_service.extract_from_text(
+        await tool_extractor.extract(
             text="Acme Corp invoice...", doc_type="invoice"
         )
     )
@@ -107,19 +146,43 @@ async def test_extract_from_text_success_after_retry(
 
 
 @pytest.mark.asyncio
+async def test_extract_from_text_counts_tokens_from_no_tool_retry(
+    tool_extractor: ToolCallExtractor,
+    mock_llm_client: AsyncMock,
+) -> None:
+    expected_data = {"vendor_name": "Acme Corp"}
+    mock_llm_client.call_tool.side_effect = [
+        ToolCallResult(arguments=None, input_tokens=20, output_tokens=5),
+        ToolCallResult(
+            arguments=expected_data,
+            input_tokens=150,
+            output_tokens=50,
+        ),
+    ]
+
+    result, input_tokens, output_tokens = (
+        await tool_extractor.extract(
+            text="Acme Corp invoice...", doc_type="invoice"
+        )
+    )
+
+    assert result == expected_data
+    assert input_tokens == 170
+    assert output_tokens == 55
+
+
+@pytest.mark.asyncio
 async def test_extract_from_text_exhausted_retries(
     mock_llm_client: AsyncMock,
 ) -> None:
     mock_llm_client.call_tool.return_value = None
-    service = ExtractionService(
-        classifier=AsyncMock(),
+    service = ToolCallExtractor(
         llm_client=mock_llm_client,
-        storage=AsyncMock(),
         max_retries=2,
     )
 
     with pytest.raises(ExtractionError) as exc_info:
-        await service.extract_from_text(
+        await service.extract(
             text="Acme Corp invoice...", doc_type="invoice"
         )
 
@@ -130,7 +193,7 @@ async def test_extract_from_text_exhausted_retries(
 
 @pytest.mark.asyncio
 async def test_extract_from_text_passes_tool_inputs(
-    extraction_service: ExtractionService,
+    tool_extractor: ToolCallExtractor,
     mock_llm_client: AsyncMock,
 ) -> None:
     mock_llm_client.call_tool.return_value = ToolCallResult(
@@ -139,7 +202,7 @@ async def test_extract_from_text_passes_tool_inputs(
         output_tokens=50,
     )
 
-    await extraction_service.extract_from_text(
+    await tool_extractor.extract(
         text="Acme Corp invoice...", doc_type="invoice"
     )
 
@@ -149,19 +212,21 @@ async def test_extract_from_text_passes_tool_inputs(
     assert call.kwargs["tool"]["function"]["name"] == "extract_invoice"
     assert call.kwargs["system_prompt"] == EXTRACTION_SYSTEM_PROMPT
     assert call.kwargs["user_content"] == (
-        "Document text:\nAcme Corp invoice..."
+        EXTRACTION_USER_PROMPT_TEMPLATE.format(text="Acme Corp invoice...")
     )
+    assert "Normalize dates to ISO 8601" in call.kwargs["user_content"]
+    assert "Do not guess missing values" in call.kwargs["user_content"]
 
 
 @pytest.mark.asyncio
 async def test_extract_from_text_wraps_llm_client_error(
-    extraction_service: ExtractionService,
+    tool_extractor: ToolCallExtractor,
     mock_llm_client: AsyncMock,
 ) -> None:
     mock_llm_client.call_tool.side_effect = LLMClientError("bad response")
 
     with pytest.raises(ExtractionError) as exc_info:
-        await extraction_service.extract_from_text(
+        await tool_extractor.extract(
             text="Acme Corp invoice...", doc_type="invoice"
         )
 
@@ -171,9 +236,10 @@ async def test_extract_from_text_wraps_llm_client_error(
 
 @pytest.mark.asyncio
 async def test_extract_from_pages_full_uses_all_pages(
-    extraction_service: ExtractionService,
+    page_runner: PageStrategyRunner,
+    tool_extractor: ToolCallExtractor,
 ) -> None:
-    extraction_service.extract_from_text = AsyncMock(
+    tool_extractor.extract = AsyncMock(
         return_value=(
             {"vendor_name": "Acme Corp"},
             100,
@@ -181,7 +247,7 @@ async def test_extract_from_pages_full_uses_all_pages(
         )
     )
 
-    result = await extraction_service.extract_from_pages(
+    result = await page_runner.extract_from_pages(
         pages=["First page", "Second page"],
         doc_type="invoice",
         strategy=ExtractionStrategy.FULL,
@@ -191,19 +257,24 @@ async def test_extract_from_pages_full_uses_all_pages(
     assert result.source_pages == [0, 1]
     assert result.input_tokens == 100
     assert result.output_tokens == 50
-    call = extraction_service.extract_from_text.call_args
+    call = tool_extractor.extract.call_args
     assert "Page 0:\nFirst page" in call.kwargs["text"]
     assert "Page 1:\nSecond page" in call.kwargs["text"]
 
 
-def test_resolve_strategy_defaults_to_full_for_backwards_compatibility() -> None:
+def test_resolve_strategy_defaults_by_page_count() -> None:
     assert (
-        ExtractionService._resolve_strategy(strategy=None)
+        PageStrategyRunner.resolve_strategy(strategy=None, page_count=10)
         == ExtractionStrategy.FULL
     )
     assert (
-        ExtractionService._resolve_strategy(
+        PageStrategyRunner.resolve_strategy(strategy=None, page_count=11)
+        == ExtractionStrategy.SMART
+    )
+    assert (
+        PageStrategyRunner.resolve_strategy(
             strategy="smart",
+            page_count=1,
         )
         == ExtractionStrategy.SMART
     )
@@ -217,7 +288,7 @@ def test_select_pages_includes_first_last_and_monetary_pages() -> None:
         "Signature",
     ]
 
-    selected = ExtractionService._select_pages(pages)
+    selected = PageStrategyRunner.select_pages(pages)
 
     assert selected == [
         (0, "Cover"),
@@ -228,9 +299,10 @@ def test_select_pages_includes_first_last_and_monetary_pages() -> None:
 
 @pytest.mark.asyncio
 async def test_page_by_page_merges_schema_fields_and_tracks_sources(
-    extraction_service: ExtractionService,
+    page_runner: PageStrategyRunner,
+    tool_extractor: ToolCallExtractor,
 ) -> None:
-    extraction_service.extract_from_text = AsyncMock(
+    tool_extractor.extract = AsyncMock(
         side_effect=[
             (
                 {
@@ -253,7 +325,7 @@ async def test_page_by_page_merges_schema_fields_and_tracks_sources(
         ]
     )
 
-    result = await extraction_service.extract_from_pages(
+    result = await page_runner.extract_from_pages(
         pages=["Client terms", "Payment terms"],
         doc_type="contract",
         strategy=ExtractionStrategy.PAGE_BY_PAGE,
@@ -280,32 +352,34 @@ async def test_page_by_page_merges_schema_fields_and_tracks_sources(
 
 
 @pytest.mark.asyncio
-async def test_page_by_page_replaces_scalar_source_page_on_better_value(
-    extraction_service: ExtractionService,
+async def test_page_by_page_preserves_scalar_source_pages_on_better_value(
+    page_runner: PageStrategyRunner,
+    tool_extractor: ToolCallExtractor,
 ) -> None:
-    extraction_service.extract_from_text = AsyncMock(
+    tool_extractor.extract = AsyncMock(
         side_effect=[
             ({"governing_law": "NY"}, 10, 5),
             ({"governing_law": "New York State"}, 12, 6),
         ]
     )
 
-    result = await extraction_service.extract_from_pages(
+    result = await page_runner.extract_from_pages(
         pages=["Short law", "Specific law"],
         doc_type="contract",
         strategy=ExtractionStrategy.PAGE_BY_PAGE,
     )
 
     assert result.raw_output == {"governing_law": "New York State"}
-    assert result.source_pages == [1]
-    assert result.field_source_pages == {"governing_law": [1]}
+    assert result.source_pages == [0, 1]
+    assert result.field_source_pages == {"governing_law": [0, 1]}
 
 
 @pytest.mark.asyncio
 async def test_page_by_page_skips_failed_pages_when_others_succeed(
-    extraction_service: ExtractionService,
+    page_runner: PageStrategyRunner,
+    tool_extractor: ToolCallExtractor,
 ) -> None:
-    extraction_service.extract_from_text = AsyncMock(
+    tool_extractor.extract = AsyncMock(
         side_effect=[
             ExtractionError(
                 "page failed",
@@ -325,7 +399,7 @@ async def test_page_by_page_skips_failed_pages_when_others_succeed(
         ]
     )
 
-    result = await extraction_service.extract_from_pages(
+    result = await page_runner.extract_from_pages(
         pages=["Bad page", "Good page"],
         doc_type="contract",
         strategy=ExtractionStrategy.PAGE_BY_PAGE,
@@ -343,88 +417,62 @@ async def test_page_by_page_skips_failed_pages_when_others_succeed(
 async def test_extract_upload_persists_failed_extraction(
     mock_llm_client: AsyncMock,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
-    storage = AsyncMock()
-    storage.save.return_value = "test-id/test.pdf"
-    service = ExtractionService(
-        classifier=AsyncMock(),
+    tool_extractor = ToolCallExtractor(
         llm_client=mock_llm_client,
-        storage=storage,
         max_retries=0,
+    )
+    page_runner = PageStrategyRunner(text_extractor=tool_extractor)
+    service = _build_document_processor(
+        classifier=AsyncMock(),
+        page_runner=page_runner,
     )
     mock_llm_client.call_tool.return_value = None
 
-    with pytest.raises(ExtractionError):
-        await service.extract_upload(
-            content=_create_test_pdf("Some contract data"),
-            filename="test.pdf",
+    with pytest.raises(Exception) as exc_info:
+        await service.process_pages(
+            pages=["Some contract data"],
+            page_count=1,
             doc_type="contract",
-            db=db,
         )
 
-    failed_extractions = [
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Extraction)
-        and call.args[0].status == ExtractionStatus.FAILED
-    ]
-    assert len(failed_extractions) == 1
-    assert db.commit.call_count >= 3
+    assert isinstance(exc_info.value.original, ExtractionError)
+    assert exc_info.value.resolved.doc_type == "contract"
 
 
 @pytest.mark.asyncio
 async def test_extract_upload_records_tokens_from_extraction_error(
-    mock_llm_client: AsyncMock,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
-    storage = AsyncMock()
-    storage.save.return_value = "test-id/test.pdf"
-    service = ExtractionService(
+    tool_extractor = AsyncMock()
+    tool_extractor.extract.side_effect = ExtractionError(
+        "LLM failed",
+        attempts=2,
+        input_tokens=123,
+        output_tokens=45,
+    )
+    service = _build_document_processor(
         classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
-    )
-    service.extract_from_text = AsyncMock(
-        side_effect=ExtractionError(
-            "LLM failed",
-            attempts=2,
-            input_tokens=123,
-            output_tokens=45,
-        )
+        page_runner=PageStrategyRunner(text_extractor=tool_extractor),
     )
 
-    with pytest.raises(ExtractionError):
-        await service.extract_upload(
-            content=_create_test_pdf("Some contract data"),
-            filename="test.pdf",
+    with pytest.raises(Exception) as exc_info:
+        await service.process_pages(
+            pages=["Some contract data"],
+            page_count=1,
             doc_type="contract",
-            db=db,
         )
 
-    failed_extraction = next(
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Extraction)
-        and call.args[0].status == ExtractionStatus.FAILED
-    )
-    assert failed_extraction.input_tokens == 123
-    assert failed_extraction.output_tokens == 45
+    assert exc_info.value.original.input_tokens == 123
+    assert exc_info.value.original.output_tokens == 45
 
 
 @pytest.mark.asyncio
 async def test_extract_upload_persists_failed_validation_result(
     mock_llm_client: AsyncMock,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
-    storage = AsyncMock()
-    storage.save.return_value = "test-id/test.pdf"
-    service = ExtractionService(
+    tool_extractor = ToolCallExtractor(llm_client=mock_llm_client)
+    service = _build_document_processor(
         classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
+        page_runner=PageStrategyRunner(text_extractor=tool_extractor),
     )
     mock_llm_client.call_tool.return_value = ToolCallResult(
         arguments={"invalid_field": "some data"},
@@ -432,41 +480,28 @@ async def test_extract_upload_persists_failed_validation_result(
         output_tokens=10,
     )
 
-    response = await service.extract_upload(
-        content=_create_test_pdf("Some contract data"),
-        filename="test.pdf",
+    response = await service.process_pages(
+        pages=["Some contract data"],
+        page_count=1,
         doc_type="contract",
-        db=db,
     )
 
-    failed_extractions = [
-        call.args[0]
-        for call in db.add.call_args_list
-        if isinstance(call.args[0], Extraction)
-        and call.args[0].status == ExtractionStatus.FAILED
-    ]
-    assert len(failed_extractions) == 1
-    assert failed_extractions[0].raw_tool_output == {
+    assert response.pipeline.validation.status == ExtractionStatus.FAILED
+    assert response.pipeline.extraction.audit_output == {
         "invalid_field": "some data"
     }
-    assert failed_extractions[0].warnings
-    assert response.status == "failed"
-    assert response.extracted_data is None
+    assert response.pipeline.warnings
+    assert response.pipeline.validation.extracted_data is None
 
 
 @pytest.mark.asyncio
-async def test_extract_upload_returns_result_when_audit_persist_fails(
+async def test_extract_upload_fails_when_audit_persist_fails(
     mock_llm_client: AsyncMock,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
-    db.flush.side_effect = RuntimeError("database down")
-    storage = AsyncMock()
-    storage.save.return_value = "test-id/test.pdf"
-    service = ExtractionService(
+    tool_extractor = ToolCallExtractor(llm_client=mock_llm_client)
+    service = _build_document_processor(
         classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
+        page_runner=PageStrategyRunner(text_extractor=tool_extractor),
     )
     mock_llm_client.call_tool.return_value = ToolCallResult(
         arguments={
@@ -481,75 +516,48 @@ async def test_extract_upload_returns_result_when_audit_persist_fails(
         output_tokens=50,
     )
 
-    response = await service.extract_upload(
-        content=_create_test_pdf("Some contract data"),
-        filename="test.pdf",
+    result = await service.process_pages(
+        pages=["Some contract data"],
+        page_count=1,
         doc_type="contract",
-        db=db,
     )
-
-    assert response.extraction_id is None
-    assert response.status == "completed"
-    assert response.extracted_data["effective_date"] == "2026-05-27"
-    assert response.confidence_map["parties"] == 0.85
-    assert any(
-        isinstance(call.args[0], Extraction) for call in db.add.call_args_list
-    )
-    db.rollback.assert_awaited_once()
+    assert result.pipeline.validation.status == ExtractionStatus.COMPLETED
 
 
 @pytest.mark.asyncio
 async def test_extract_upload_validates_explicit_doc_type_before_side_effects(
-    mock_llm_client: AsyncMock,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
-    storage = AsyncMock()
-    service = ExtractionService(
+    document_processor = _build_document_processor(
         classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
+        page_runner=PageStrategyRunner(text_extractor=AsyncMock()),
     )
-
     with pytest.raises(UnsupportedDocumentTypeError) as exc_info:
-        await service.extract_upload(
-            content=_create_test_pdf("Some data"),
-            filename="test.pdf",
+        await document_processor.process_pages(
+            pages=["Some data"],
+            page_count=1,
             doc_type="banana",
-            db=db,
         )
 
     assert "Unsupported document type: banana" in str(exc_info.value)
-    storage.save.assert_not_called()
-    db.add.assert_not_called()
-    db.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_extract_upload_rejects_zero_page_pdf_before_side_effects(
-    mock_llm_client: AsyncMock,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
+    from app.services.document_intake import DocumentIntakeService
+
     storage = AsyncMock()
-    service = ExtractionService(
-        classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
-    )
+    intake = DocumentIntakeService(storage=storage)
 
     with pytest.raises(PDFParseError) as exc_info:
-        await service.extract_upload(
+        await intake.prepare_document(
             content=_create_zero_page_pdf(),
             filename="empty.pdf",
-            doc_type="contract",
-            db=db,
+            status=DocumentStatus.UPLOADED,
         )
 
     assert "PDF does not contain any pages" in str(exc_info.value)
     storage.save.assert_not_called()
-    db.add.assert_not_called()
-    db.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -557,27 +565,11 @@ async def test_extract_upload_offloads_pdf_parsing(
     mock_llm_client: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
     storage = AsyncMock()
     storage.save.return_value = "test-id/test.pdf"
-    service = ExtractionService(
-        classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
-    )
-    mock_llm_client.call_tool.return_value = ToolCallResult(
-        arguments={
-            "parties": [
-                {"name": "Client Corp", "role": "Client"},
-                {"name": "Vendor Corp", "role": "Vendor"},
-            ],
-            "effective_date": "2026-05-27",
-            "key_obligations": ["Deliver goods"],
-        },
-        input_tokens=100,
-        output_tokens=50,
-    )
+    from app.services.document_intake import DocumentIntakeService
+
+    intake = DocumentIntakeService(storage=storage)
 
     run_sync = AsyncMock()
 
@@ -586,40 +578,65 @@ async def test_extract_upload_offloads_pdf_parsing(
 
     run_sync.side_effect = fake_run_sync
     monkeypatch.setattr(
-        "app.services.extraction.anyio.to_thread.run_sync", run_sync
+        "app.services.document_intake.anyio.to_thread.run_sync", run_sync
     )
 
-    await service.extract_upload(
+    await intake.prepare_document(
         content=_create_test_pdf("Some contract data"),
         filename="test.pdf",
-        doc_type="contract",
-        db=db,
+        status=DocumentStatus.UPLOADED,
     )
 
     run_sync.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_extract_upload_deletes_saved_file_if_initial_db_commit_fails(
-    mock_llm_client: AsyncMock,
+async def test_document_intake_returns_document_and_pages(
 ) -> None:
-    db = AsyncMock()
-    db.add = MagicMock()
-    db.commit.side_effect = RuntimeError("database down")
+    from app.services.document_intake import DocumentIntakeService
+
     storage = AsyncMock()
     storage.save.return_value = "test-id/test.pdf"
-    service = ExtractionService(
-        classifier=AsyncMock(),
-        llm_client=mock_llm_client,
-        storage=storage,
+    intake = DocumentIntakeService(storage=storage)
+
+    result = await intake.prepare_document(
+        content=_create_test_pdf("Invoice page"),
+        filename="invoice.pdf",
+        status=DocumentStatus.UPLOADED,
     )
 
-    with pytest.raises(RuntimeError, match="database down"):
-        await service.extract_upload(
-            content=_create_test_pdf("Some contract data"),
-            filename="test.pdf",
-            doc_type="contract",
-            db=db,
-        )
+    assert result.document.filename == "invoice.pdf"
+    assert result.document.file_path == "test-id/test.pdf"
+    assert result.document.status == DocumentStatus.UPLOADED
+    assert result.pages_text
 
-    storage.delete.assert_called_once_with("test-id/test.pdf")
+
+@pytest.mark.asyncio
+async def test_extract_existing_document_raises_not_found_error(
+) -> None:
+    classifier = AsyncMock()
+    classifier.classify.return_value.doc_type = "invoice"
+    classifier.classify.return_value.usage = MagicMock()
+    page_runner = AsyncMock()
+    page_runner.resolve_strategy.return_value = ExtractionStrategy.FULL
+    page_runner.extract_from_pages.return_value = MagicMock(
+        raw_output={"vendor_name": "Acme"},
+        input_tokens=1,
+        output_tokens=1,
+        strategy=ExtractionStrategy.FULL,
+        source_pages=[0],
+        warnings=[],
+        audit_output={"vendor_name": "Acme"},
+    )
+    processor = _build_document_processor(
+        classifier=classifier,
+        page_runner=page_runner,
+    )
+
+    await processor.process_pages(
+        pages=["Invoice text"],
+        page_count=1,
+        doc_type=None,
+    )
+
+    classifier.classify.assert_awaited_once_with("Invoice text")

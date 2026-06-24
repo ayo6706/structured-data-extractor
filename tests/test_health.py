@@ -6,12 +6,12 @@ from app.main import app
 
 
 class HealthyDb:
-    async def execute(self, query):
+    async def execute(self, _query):
         return None
 
 
 class FailingDb:
-    async def execute(self, query):
+    async def execute(self, _query):
         raise RuntimeError("database unavailable")
 
 

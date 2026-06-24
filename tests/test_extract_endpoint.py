@@ -6,9 +6,10 @@ import pytest
 from fastapi import status
 from httpx import ASGITransport, AsyncClient
 
-from app.api.dependencies import get_db, get_extraction_service
+from app.api.dependencies import get_db, get_document_service
 from app.core.exceptions import (
     ClassificationError,
+    DocumentNotFoundError,
     ExtractionError,
     PDFParseError,
     StorageError,
@@ -24,21 +25,21 @@ def mock_deps() -> tuple[AsyncMock, AsyncMock]:
     db = AsyncMock()
     extraction_service = AsyncMock()
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[get_extraction_service] = (
-        lambda: extraction_service
+    app.dependency_overrides[get_document_service] = lambda: (
+        extraction_service
     )
 
     try:
         yield db, extraction_service
     finally:
         app.dependency_overrides.pop(get_db, None)
-        app.dependency_overrides.pop(get_extraction_service, None)
+        app.dependency_overrides.pop(get_document_service, None)
 
 
 @pytest.mark.asyncio
 async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.return_value = ExtractResponse(
+    extraction_service.extract_document.return_value = ExtractResponse(
         extraction_id=uuid4(),
         doc_type="contract",
         status="completed",
@@ -62,7 +63,7 @@ async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"doc_type": "contract"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
@@ -76,9 +77,9 @@ async def test_extract_success(mock_deps: tuple[AsyncMock, AsyncMock]) -> None:
     assert data["model_used"] == "test-model"
     assert data["input_tokens"] == 100
     assert data["output_tokens"] == 50
-    extraction_service.extract_upload.assert_called_once()
+    extraction_service.extract_document.assert_called_once()
     assert (
-        extraction_service.extract_upload.call_args.kwargs["strategy"] is None
+        extraction_service.extract_document.call_args.kwargs["strategy"] is None
     )
 
 
@@ -87,7 +88,7 @@ async def test_extract_passes_strategy_query_param(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.return_value = ExtractResponse(
+    extraction_service.extract_document.return_value = ExtractResponse(
         extraction_id=uuid4(),
         doc_type="invoice",
         status="completed",
@@ -104,14 +105,14 @@ async def test_extract_passes_strategy_query_param(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"strategy": "page_by_page"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
 
     assert response.status_code == status.HTTP_200_OK
     assert (
-        extraction_service.extract_upload.call_args.kwargs["strategy"]
+        extraction_service.extract_document.call_args.kwargs["strategy"]
         == ExtractionStrategy.PAGE_BY_PAGE
     )
 
@@ -127,13 +128,74 @@ async def test_extract_rejects_invalid_strategy(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"strategy": "unknown"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    extraction_service.extract_upload.assert_not_called()
+    extraction_service.extract_document.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extract_existing_document_success(
+    mock_deps: tuple[AsyncMock, AsyncMock],
+) -> None:
+    _, extraction_service = mock_deps
+    document_id = uuid4()
+    extraction_service.extract_document.return_value = ExtractResponse(
+        extraction_id=uuid4(),
+        doc_type="invoice",
+        status="completed",
+        extracted_data={"vendor_name": "Acme Corp"},
+        confidence_map={"vendor_name": 0.85},
+        warnings=[],
+        model_used="test-model",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/documents/extractions",
+            params={"document_id": str(document_id), "doc_type": "invoice"},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["doc_type"] == "invoice"
+    extraction_service.extract_document.assert_called_once()
+    assert (
+        extraction_service.extract_document.call_args.kwargs[
+            "document_id"
+        ]
+        == document_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_existing_document_returns_404(
+    mock_deps: tuple[AsyncMock, AsyncMock],
+) -> None:
+    _, extraction_service = mock_deps
+    document_id = uuid4()
+    extraction_service.extract_document.side_effect = (
+        DocumentNotFoundError(document_id)
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/documents/extractions",
+            params={"document_id": str(document_id)},
+        )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == "Document not found"
 
 
 @pytest.mark.asyncio
@@ -141,7 +203,7 @@ async def test_extract_validation_failed_status(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.return_value = ExtractResponse(
+    extraction_service.extract_document.return_value = ExtractResponse(
         extraction_id=None,
         doc_type="contract",
         status="failed",
@@ -158,7 +220,7 @@ async def test_extract_validation_failed_status(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"doc_type": "contract"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
@@ -181,13 +243,13 @@ async def test_extract_rejects_non_pdf_upload(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             files={"file": ("test.txt", b"text", "text/plain")},
         )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["detail"] == "Only PDF uploads are supported"
-    extraction_service.extract_upload.assert_not_called()
+    extraction_service.extract_document.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -197,7 +259,7 @@ async def test_extract_rejects_oversized_upload(
 ) -> None:
     _, extraction_service = mock_deps
     monkeypatch.setattr(
-        "app.api.v1.endpoints.extractions.get_app_settings",
+        "app.api.validation.get_app_settings",
         lambda: SimpleNamespace(MAX_UPLOAD_SIZE_BYTES=3),
     )
     transport = ASGITransport(app=app)
@@ -206,13 +268,13 @@ async def test_extract_rejects_oversized_upload(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             files={"file": ("test.pdf", b"1234", "application/pdf")},
         )
 
     assert response.status_code == status.HTTP_413_CONTENT_TOO_LARGE
     assert response.json()["detail"] == "Uploaded file is too large"
-    extraction_service.extract_upload.assert_not_called()
+    extraction_service.extract_document.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -220,7 +282,7 @@ async def test_extract_invalid_pdf(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.side_effect = PDFParseError(
+    extraction_service.extract_document.side_effect = PDFParseError(
         "test.pdf", Exception("bad pdf")
     )
     transport = ASGITransport(app=app)
@@ -229,7 +291,7 @@ async def test_extract_invalid_pdf(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             files={"file": ("test.pdf", b"garbage", "application/pdf")},
         )
 
@@ -242,7 +304,7 @@ async def test_extract_storage_error(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.side_effect = StorageError(
+    extraction_service.extract_document.side_effect = StorageError(
         path="path", operation="save", original_exception=Exception("full")
     )
     transport = ASGITransport(app=app)
@@ -251,7 +313,7 @@ async def test_extract_storage_error(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"doc_type": "contract"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
@@ -267,7 +329,7 @@ async def test_extract_classification_error(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.side_effect = ClassificationError(
+    extraction_service.extract_document.side_effect = ClassificationError(
         "LLM failed"
     )
     transport = ASGITransport(app=app)
@@ -276,7 +338,7 @@ async def test_extract_classification_error(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
 
@@ -289,7 +351,7 @@ async def test_extract_explicit_doc_type_invalid(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.side_effect = (
+    extraction_service.extract_document.side_effect = (
         UnsupportedDocumentTypeError("banana")
     )
     transport = ASGITransport(app=app)
@@ -298,7 +360,7 @@ async def test_extract_explicit_doc_type_invalid(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"doc_type": "banana"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
@@ -312,7 +374,7 @@ async def test_extract_auto_unknown(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.side_effect = (
+    extraction_service.extract_document.side_effect = (
         UnsupportedDocumentTypeError("unknown")
     )
     transport = ASGITransport(app=app)
@@ -321,7 +383,7 @@ async def test_extract_auto_unknown(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
 
@@ -334,7 +396,7 @@ async def test_extract_engine_error(
     mock_deps: tuple[AsyncMock, AsyncMock],
 ) -> None:
     _, extraction_service = mock_deps
-    extraction_service.extract_upload.side_effect = ExtractionError(
+    extraction_service.extract_document.side_effect = ExtractionError(
         "LLM failed", attempts=3
     )
     transport = ASGITransport(app=app)
@@ -343,10 +405,11 @@ async def test_extract_engine_error(
         transport=transport, base_url="http://test"
     ) as client:
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/documents/extractions",
             params={"doc_type": "contract"},
             files={"file": ("test.pdf", b"%PDF-1.7", "application/pdf")},
         )
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert "Extraction failed" in response.json()["detail"]
+    assert response.json()["detail"] == "Extraction failed"
+    assert "LLM failed" not in response.json()["detail"]
