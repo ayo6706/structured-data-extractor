@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import cost_settings, get_app_settings
 from app.core.database import get_db, get_session_factory
-from app.factories.document_processor import DocumentProcessorFactory
 from app.infrastructure.storage import LocalStorage, StorageBackend
 from app.integrations.llm.litellm_client import LiteLLMClient
 from app.services.classifier import ClassifierService
@@ -37,45 +36,41 @@ ClassifierDep = Annotated[ClassifierService, Depends(get_classifier_service)]
 @lru_cache
 def get_storage() -> StorageBackend:
     settings = get_app_settings()
-    if settings.STORAGE_BACKEND == "local":
-        return LocalStorage(base_dir=settings.STORAGE_LOCAL_DIR)
-    raise NotImplementedError(
-        f"Storage backend '{settings.STORAGE_BACKEND}' is not implemented."
-    )
+    return LocalStorage(base_dir=settings.STORAGE_LOCAL_DIR)
 
 
 StorageDep = Annotated[StorageBackend, Depends(get_storage)]
 
 
-def get_document_processor_factory(
-    classifier: ClassifierDep,
+def get_tool_extractor(
     llm_client: LLMClientDep,
-    storage: StorageDep,
-) -> DocumentProcessorFactory:
-    tool_extractor = ToolCallExtractor(llm_client=llm_client)
-    page_runner = PageStrategyRunner(text_extractor=tool_extractor)
-    return DocumentProcessorFactory(
+) -> ToolCallExtractor:
+    return ToolCallExtractor(llm_client=llm_client)
+
+
+ToolExtractorDep = Annotated[ToolCallExtractor, Depends(get_tool_extractor)]
+
+
+def get_page_runner(
+    tool_extractor: ToolExtractorDep,
+) -> PageStrategyRunner:
+    return PageStrategyRunner(text_extractor=tool_extractor)
+
+
+PageRunnerDep = Annotated[PageStrategyRunner, Depends(get_page_runner)]
+
+
+def get_document_processor(
+    classifier: ClassifierDep,
+    page_runner: PageRunnerDep,
+) -> DocumentProcessor:
+    return DocumentProcessor(
         classifier=classifier,
         page_runner=page_runner,
-        storage=storage,
-        model=tool_extractor.model,
     )
 
 
-DocumentProcessorFactoryDep = Annotated[
-    DocumentProcessorFactory,
-    Depends(get_document_processor_factory),
-]
-
-
-def get_extraction_service(
-    db: DbDep,
-    processor_factory: DocumentProcessorFactoryDep,
-) -> DocumentProcessor:
-    return processor_factory.create(db)
-
-
-ExtractionDep = Annotated[DocumentProcessor, Depends(get_extraction_service)]
+ProcessorDep = Annotated[DocumentProcessor, Depends(get_document_processor)]
 
 
 def get_arq_pool(request: Request) -> ArqRedis | None:
@@ -87,14 +82,16 @@ ArqPoolDep = Annotated[ArqRedis | None, Depends(get_arq_pool)]
 
 def get_document_service(
     db: DbDep,
-    processor: ExtractionDep,
-    processor_factory: DocumentProcessorFactoryDep,
+    processor: ProcessorDep,
+    storage: StorageDep,
+    tool_extractor: ToolExtractorDep,
     arq_pool: ArqPoolDep,
 ) -> DocumentService:
     return DocumentService(
         db=db,
         processor=processor,
-        processor_factory=processor_factory,
+        storage=storage,
+        model=tool_extractor.model,
         arq_pool=arq_pool,
         session_factory=get_session_factory(),
         price_for_model=cost_settings.price_for_model,

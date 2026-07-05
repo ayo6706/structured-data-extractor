@@ -52,7 +52,6 @@ def register_exception_handlers(app: FastAPI) -> None:
         _correction_validation_error,
     )
     app.add_exception_handler(SQLAlchemyError, _database_error)
-    app.add_exception_handler(RuntimeError, _runtime_error)
 
 
 async def _document_not_found(
@@ -173,17 +172,6 @@ async def _database_error(
     return _response(
         status.HTTP_500_INTERNAL_SERVER_ERROR,
         "Database operation failed",
-    )
-
-
-async def _runtime_error(
-    _request: Request,
-    exc: RuntimeError,
-) -> JSONResponse:
-    logger.error("Unexpected infrastructure failure: %s", exc)
-    return _response(
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-        "Extraction failed unexpectedly",
     )
 
 
