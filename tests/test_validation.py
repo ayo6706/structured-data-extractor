@@ -192,3 +192,24 @@ def test_validation_coerces_decimal_without_warning() -> None:
     assert result.status == ExtractionStatus.COMPLETED
     assert result.warnings == []
     assert result.extracted_data["total_amount"] == "3.50"
+
+
+def test_validation_preserves_receipt_reference_fields() -> None:
+    result = validate_extraction(
+        "receipt",
+        {
+            "merchant_name": "Namecheap",
+            "order_number": "204002854",
+            "transaction_id": "247907377",
+            "receipt_date": "2026-06-25",
+            "items": [{"description": "Domain renewal", "amount": "6.99"}],
+            "subtotal": "6.99",
+            "total_amount": "6.99",
+            "currency": "USD",
+            "payment_method": "CreditCard",
+        },
+    )
+
+    assert result.status == ExtractionStatus.COMPLETED
+    assert result.extracted_data["order_number"] == "204002854"
+    assert result.extracted_data["transaction_id"] == "247907377"

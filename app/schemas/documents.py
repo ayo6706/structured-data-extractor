@@ -153,6 +153,12 @@ class ReceiptSchema(BaseModel):
     merchant_address: str | None = Field(
         None, description="Address of the merchant"
     )
+    order_number: str | None = Field(
+        None, description="Order, receipt, or purchase reference number"
+    )
+    transaction_id: str | None = Field(
+        None, description="Payment processor transaction identifier"
+    )
     receipt_date: date = Field(description="Date the receipt was issued")
     items: list[LineItem] = Field(description="List of items purchased")
     subtotal: Decimal | None = Field(None, description="Total before taxes")

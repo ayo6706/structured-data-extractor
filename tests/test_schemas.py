@@ -142,6 +142,8 @@ def test_receipt_schema_accepts_total_adjustments():
     model = ReceiptSchema.model_validate(
         {
             "merchant_name": "Store",
+            "order_number": "204002854",
+            "transaction_id": "247907377",
             "receipt_date": "2026-05-26",
             "items": [],
             "subtotal": "10.00",
@@ -152,3 +154,5 @@ def test_receipt_schema_accepts_total_adjustments():
     )
 
     assert model.total_amount == Decimal("10.50")
+    assert model.order_number == "204002854"
+    assert model.transaction_id == "247907377"
