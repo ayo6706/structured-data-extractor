@@ -1,7 +1,6 @@
 import pytest
 from pydantic import BaseModel, Field
 
-from app.schemas.documents import InvoiceSchema
 from app.schemas.registry import SchemaRegistry
 
 
@@ -41,22 +40,6 @@ def test_registry_get_tool_unknown():
         SchemaRegistry.get_tool("unknown_doc")
 
     assert "Unknown document type: unknown_doc" in str(exc_info.value)
-
-
-def test_registry_validate():
-    raw_data = {
-        "vendor_name": "Test",
-        "invoice_number": "123",
-        "invoice_date": "2026-05-26",
-        "subtotal": 10,
-        "total_amount": 10,
-        "currency": "USD",
-        "line_items": [],
-    }
-
-    model = SchemaRegistry.validate("invoice", raw_data)
-    assert isinstance(model, InvoiceSchema)
-    assert model.vendor_name == "Test"
 
 
 def test_registry_picks_up_new_schema(

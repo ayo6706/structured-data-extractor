@@ -8,7 +8,6 @@ from app.core.exceptions import (
     PDFParseError,
     UnsupportedDocumentTypeError,
 )
-from app.factories.document_processor import DocumentProcessorFactory
 from app.integrations.llm.client import LLMClientError, ToolCallResult
 from app.models.document import DocumentStatus
 from app.models.extraction import ExtractionStatus
@@ -80,20 +79,14 @@ def _build_document_processor(
     *,
     classifier: AsyncMock,
     page_runner: PageStrategyRunner,
-    storage: AsyncMock | None = None,
     db: AsyncMock | None = None,
 ) -> DocumentProcessor:
     db = db or AsyncMock()
     db.add = MagicMock()
-    storage = storage or AsyncMock()
-    storage.save.return_value = "test-id/test.pdf"
-    factory = DocumentProcessorFactory(
+    return DocumentProcessor(
         classifier=classifier,
         page_runner=page_runner,
-        storage=storage,
-        model="test-model",
     )
-    return factory.create(db)
 
 
 @pytest.mark.asyncio
@@ -617,9 +610,10 @@ async def test_extract_existing_document_raises_not_found_error(
     classifier = AsyncMock()
     classifier.classify.return_value.doc_type = "invoice"
     classifier.classify.return_value.usage = MagicMock()
-    page_runner = AsyncMock()
+    page_runner = MagicMock()
     page_runner.resolve_strategy.return_value = ExtractionStrategy.FULL
-    page_runner.extract_from_pages.return_value = MagicMock(
+    page_runner.extract_from_pages = AsyncMock(
+        return_value=MagicMock(
         raw_output={"vendor_name": "Acme"},
         input_tokens=1,
         output_tokens=1,
@@ -627,6 +621,7 @@ async def test_extract_existing_document_raises_not_found_error(
         source_pages=[0],
         warnings=[],
         audit_output={"vendor_name": "Acme"},
+        )
     )
     processor = _build_document_processor(
         classifier=classifier,

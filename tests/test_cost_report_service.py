@@ -10,8 +10,6 @@ class CostRow(NamedTuple):
     doc_type: str
     count: int
     avg_duration_ms: float
-    total_input_tokens: int
-    total_output_tokens: int
 
 
 class UsageCostRow(NamedTuple):
@@ -39,8 +37,6 @@ def test_build_cost_breakdown_totals_rows() -> None:
                 doc_type="invoice",
                 count=2,
                 avg_duration_ms=100.0,
-                total_input_tokens=100,
-                total_output_tokens=20,
             )
         ],
         usage_rows=[UsageCostRow("invoice", "test-model", 100, 20)],

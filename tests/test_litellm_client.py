@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -15,15 +16,32 @@ TEST_TOOL = {
 }
 
 
-def _create_mock_response(content: str) -> MagicMock:
-    response = MagicMock()
-    choice = MagicMock()
-    choice.message.content = content
-    choice.message.refusal = None
-    response.choices = [choice]
-    response.usage.prompt_tokens = 12
-    response.usage.completion_tokens = 3
-    return response
+def _usage(prompt_tokens: int, completion_tokens: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def _message(**kwargs) -> SimpleNamespace:
+    defaults = {
+        "content": None,
+        "refusal": None,
+        "tool_calls": None,
+    }
+    return SimpleNamespace(**{**defaults, **kwargs})
+
+
+def _response(
+    *,
+    message: SimpleNamespace,
+    prompt_tokens: int = 12,
+    completion_tokens: int = 3,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message)],
+        usage=_usage(prompt_tokens, completion_tokens),
+    )
 
 
 @pytest.mark.asyncio
@@ -31,7 +49,9 @@ def _create_mock_response(content: str) -> MagicMock:
 async def test_litellm_client_generate_text_returns_text(
     mock_acompletion: AsyncMock,
 ) -> None:
-    mock_acompletion.return_value = _create_mock_response("invoice")
+    mock_acompletion.return_value = _response(
+        message=_message(content="invoice")
+    )
     client = LiteLLMClient()
 
     result = await client.generate_text(
@@ -73,8 +93,7 @@ async def test_litellm_client_wraps_provider_errors(
 async def test_litellm_client_wraps_unexpected_response_shape(
     mock_acompletion: AsyncMock,
 ) -> None:
-    response = MagicMock()
-    response.choices = []
+    response = SimpleNamespace(choices=[])
     mock_acompletion.return_value = response
     client = LiteLLMClient()
 
@@ -93,16 +112,17 @@ async def test_litellm_client_wraps_unexpected_response_shape(
 async def test_litellm_client_call_tool_success(
     mock_acompletion: AsyncMock,
 ) -> None:
-    mock_response = MagicMock()
-    choice = MagicMock()
-    tool_call = MagicMock()
-    tool_call.function.name = "extract_invoice"
-    tool_call.function.arguments = '{"vendor_name": "Acme Corp"}'
-    choice.message.tool_calls = [tool_call]
-    choice.message.refusal = None
-    mock_response.choices = [choice]
-    mock_response.usage.prompt_tokens = 80
-    mock_response.usage.completion_tokens = 40
+    tool_call = SimpleNamespace(
+        function=SimpleNamespace(
+            name="extract_invoice",
+            arguments='{"vendor_name": "Acme Corp"}',
+        )
+    )
+    mock_response = _response(
+        message=_message(tool_calls=[tool_call]),
+        prompt_tokens=80,
+        completion_tokens=40,
+    )
     mock_acompletion.return_value = mock_response
 
     client = LiteLLMClient()
@@ -137,16 +157,17 @@ async def test_litellm_client_call_tool_success(
 async def test_litellm_client_call_tool_accepts_dict_arguments(
     mock_acompletion: AsyncMock,
 ) -> None:
-    mock_response = MagicMock()
-    choice = MagicMock()
-    tool_call = MagicMock()
-    tool_call.function.name = "extract_invoice"
-    tool_call.function.arguments = {"vendor_name": "Acme Corp"}
-    choice.message.tool_calls = [tool_call]
-    choice.message.refusal = None
-    mock_response.choices = [choice]
-    mock_response.usage.prompt_tokens = 80
-    mock_response.usage.completion_tokens = 40
+    tool_call = SimpleNamespace(
+        function=SimpleNamespace(
+            name="extract_invoice",
+            arguments={"vendor_name": "Acme Corp"},
+        )
+    )
+    mock_response = _response(
+        message=_message(tool_calls=[tool_call]),
+        prompt_tokens=80,
+        completion_tokens=40,
+    )
     mock_acompletion.return_value = mock_response
 
     client = LiteLLMClient()
@@ -169,16 +190,17 @@ async def test_litellm_client_call_tool_accepts_dict_arguments(
 async def test_litellm_client_rejects_unexpected_tool_name(
     mock_acompletion: AsyncMock,
 ) -> None:
-    mock_response = MagicMock()
-    choice = MagicMock()
-    tool_call = MagicMock()
-    tool_call.function.name = "extract_contract"
-    tool_call.function.arguments = '{"vendor_name": "Acme Corp"}'
-    choice.message.tool_calls = [tool_call]
-    choice.message.refusal = None
-    mock_response.choices = [choice]
-    mock_response.usage.prompt_tokens = 80
-    mock_response.usage.completion_tokens = 40
+    tool_call = SimpleNamespace(
+        function=SimpleNamespace(
+            name="extract_contract",
+            arguments='{"vendor_name": "Acme Corp"}',
+        )
+    )
+    mock_response = _response(
+        message=_message(tool_calls=[tool_call]),
+        prompt_tokens=80,
+        completion_tokens=40,
+    )
     mock_acompletion.return_value = mock_response
 
     client = LiteLLMClient()
@@ -202,14 +224,11 @@ async def test_litellm_client_rejects_unexpected_tool_name(
 async def test_litellm_client_call_tool_prose(
     mock_acompletion: AsyncMock,
 ) -> None:
-    mock_response = MagicMock()
-    choice = MagicMock()
-    choice.message.tool_calls = None
-    choice.message.content = "No tool call here"
-    choice.message.refusal = None
-    mock_response.choices = [choice]
-    mock_response.usage.prompt_tokens = 50
-    mock_response.usage.completion_tokens = 10
+    mock_response = _response(
+        message=_message(content="No tool call here"),
+        prompt_tokens=50,
+        completion_tokens=10,
+    )
     mock_acompletion.return_value = mock_response
 
     client = LiteLLMClient()
@@ -246,10 +265,9 @@ async def test_litellm_client_call_tool_prose(
 async def test_litellm_client_call_tool_refusal(
     mock_acompletion: AsyncMock,
 ) -> None:
-    mock_response = MagicMock()
-    choice = MagicMock()
-    choice.message.refusal = "I cannot process this request."
-    mock_response.choices = [choice]
+    mock_response = _response(
+        message=_message(refusal="I cannot process this request.")
+    )
     mock_acompletion.return_value = mock_response
 
     client = LiteLLMClient()

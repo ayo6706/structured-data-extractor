@@ -10,7 +10,6 @@ from app.schemas.documents import (
     ReceiptSchema,
 )
 from app.schemas.registry import SchemaRegistry
-from app.schemas.requests import ExtractRequest
 
 
 @pytest.mark.parametrize(
@@ -153,15 +152,3 @@ def test_receipt_schema_accepts_total_adjustments():
     )
 
     assert model.total_amount == Decimal("10.50")
-
-
-def test_extract_request_restricts_strategy_and_doc_type():
-    assert ExtractRequest.model_validate(
-        {"doc_type": "invoice", "strategy": "smart"}
-    )
-
-    with pytest.raises(ValidationError):
-        ExtractRequest.model_validate({"doc_type": "unknown"})
-
-    with pytest.raises(ValidationError):
-        ExtractRequest.model_validate({"strategy": "custom"})

@@ -3,9 +3,9 @@ from decimal import Decimal
 import pytest
 
 from app.core.config import (
+    DEFAULT_MODEL_TOKEN_PRICES_USD,
     AppConfig,
     CostConfig,
-    DEFAULT_MODEL_TOKEN_PRICES_USD,
     ModelTokenPrice,
     get_database_url,
 )

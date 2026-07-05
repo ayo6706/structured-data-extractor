@@ -52,17 +52,11 @@ def _extract_response(
     )
 
 
-def _processor_factory(processor: AsyncMock) -> MagicMock:
+def _storage(processor: AsyncMock) -> AsyncMock:
     processor.storage = getattr(processor, "storage", AsyncMock())
     processor.storage.save.return_value = "path/to/file"
     processor.storage.load.return_value = _create_test_pdf(["Page 1 content"])
-    factory = MagicMock()
-    factory.storage = processor.storage
-    factory.create.return_value = processor
-    audit = AsyncMock()
-    audit.record_success.return_value = _extract_response()
-    factory.create_audit_recorder.return_value = audit
-    return factory
+    return processor.storage
 
 
 def _processing_result() -> DocumentProcessingResult:
@@ -95,12 +89,12 @@ def _batch_service(
     arq_pool: AsyncMock | None = None,
 ) -> DocumentService:
     processor.process_pages.return_value = _processing_result()
-    processor_factory = _processor_factory(processor)
 
     return DocumentService(
         db=AsyncMock(),
         processor=processor,
-        processor_factory=processor_factory,
+        storage=_storage(processor),
+        model="test-model",
         arq_pool=arq_pool,
         session_factory=session_factory,
         price_for_model=cost_settings.price_for_model,
@@ -143,13 +137,13 @@ def mock_deps(
     db.add = MagicMock()
     extraction_service = AsyncMock()
     extraction_service.process_pages.return_value = _processing_result()
-    processor_factory = _processor_factory(extraction_service)
     arq_pool = AsyncMock()
     session_factory = _SessionFactory()
     document_service = DocumentService(
         db=db,
         processor=extraction_service,
-        processor_factory=processor_factory,
+        storage=_storage(extraction_service),
+        model="test-model",
         arq_pool=arq_pool,
         session_factory=session_factory,
         price_for_model=cost_settings.price_for_model,
@@ -241,7 +235,7 @@ async def test_batch_extract_sync_success(
 
     pdf_bytes = _create_test_pdf(["Page 1 content"])
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(
         transport=transport, base_url="http://test"
     ) as client:
@@ -504,7 +498,7 @@ async def test_extract_async_deletes_upload_when_document_commit_fails(
 
     pdf_bytes = _create_test_pdf(["Page 1 content"])
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(
         transport=transport, base_url="http://test"
     ) as client:

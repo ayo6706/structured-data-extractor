@@ -19,13 +19,11 @@ from app.services.documents import DocumentService
 def _service(db: AsyncMock) -> DocumentService:
     processor = AsyncMock()
     processor.storage = AsyncMock()
-    processor_factory = MagicMock()
-    processor_factory.storage = processor.storage
-    processor_factory.create.return_value = processor
     return DocumentService(
         db=db,
         processor=processor,
-        processor_factory=processor_factory,
+        storage=processor.storage,
+        model="test-model",
         arq_pool=None,
         session_factory=AsyncMock(),
         price_for_model=lambda _model: ModelTokenPrice(

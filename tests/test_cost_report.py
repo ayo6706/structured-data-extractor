@@ -20,16 +20,12 @@ class CostRow(NamedTuple):
     doc_type: str
     count: int
     avg_duration_ms: float
-    total_input_tokens: int
-    total_output_tokens: int
 
 
 class StrategyCostRow(NamedTuple):
     strategy: str
     count: int
     avg_duration_ms: float
-    total_input_tokens: int
-    total_output_tokens: int
 
 
 class UsageCostRow(NamedTuple):
@@ -50,6 +46,7 @@ def mock_db() -> AsyncMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("mock_db")
 @patch.object(LLMUsageRepository, "get_purpose_usage_report_data")
 @patch.object(LLMUsageRepository, "get_model_usage_report_data")
 @patch.object(LLMUsageRepository, "get_strategy_usage_report_data")
@@ -63,22 +60,17 @@ async def test_cost_report_success(
     mock_get_strategy_usage: AsyncMock,
     mock_get_model_usage: AsyncMock,
     mock_get_purpose_usage: AsyncMock,
-    mock_db: AsyncMock,
 ) -> None:
     mock_get_data.return_value = [
         CostRow(
             doc_type="contract",
             count=2,
             avg_duration_ms=1200.0,
-            total_input_tokens=100,
-            total_output_tokens=50,
         ),
         CostRow(
             doc_type="invoice",
             count=1,
             avg_duration_ms=600.0,
-            total_input_tokens=40,
-            total_output_tokens=20,
         ),
     ]
     mock_get_strategy_data.return_value = [
@@ -86,15 +78,11 @@ async def test_cost_report_success(
             strategy="full",
             count=2,
             avg_duration_ms=1000.0,
-            total_input_tokens=120,
-            total_output_tokens=60,
         ),
         StrategyCostRow(
             strategy="smart",
             count=1,
             avg_duration_ms=400.0,
-            total_input_tokens=20,
-            total_output_tokens=10,
         ),
     ]
     mock_get_doc_type_usage.return_value = [
@@ -176,6 +164,7 @@ async def test_cost_report_success(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("mock_db")
 @patch.object(LLMUsageRepository, "get_purpose_usage_report_data")
 @patch.object(LLMUsageRepository, "get_model_usage_report_data")
 @patch.object(LLMUsageRepository, "get_strategy_usage_report_data")
@@ -189,7 +178,6 @@ async def test_cost_report_empty(
     mock_get_strategy_usage: AsyncMock,
     mock_get_model_usage: AsyncMock,
     mock_get_purpose_usage: AsyncMock,
-    mock_db: AsyncMock,
 ) -> None:
     mock_get_data.return_value = []
     mock_get_strategy_data.return_value = []
@@ -217,6 +205,7 @@ async def test_cost_report_empty(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("mock_db")
 @patch.object(LLMUsageRepository, "get_purpose_usage_report_data")
 @patch.object(LLMUsageRepository, "get_model_usage_report_data")
 @patch.object(LLMUsageRepository, "get_strategy_usage_report_data")
@@ -230,7 +219,6 @@ async def test_cost_report_filters_passed(
     mock_get_strategy_usage: AsyncMock,
     mock_get_model_usage: AsyncMock,
     mock_get_purpose_usage: AsyncMock,
-    mock_db: AsyncMock,
 ) -> None:
     mock_get_data.return_value = []
     mock_get_strategy_data.return_value = []
