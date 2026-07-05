@@ -53,16 +53,15 @@ async def startup(app: FastAPI | None = None) -> None:
     validate_llm_api_keys()
 
     settings = get_app_settings()
-    if settings.STORAGE_BACKEND == "local":
-        try:
-            settings.STORAGE_LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-            logger.info(
-                "Local storage directory initialized at %s",
-                settings.STORAGE_LOCAL_DIR,
-            )
-        except Exception as exc:
-            logger.error("Failed to create local storage directory: %s", exc)
-            raise
+    try:
+        settings.STORAGE_LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Local storage directory initialized at %s",
+            settings.STORAGE_LOCAL_DIR,
+        )
+    except Exception as exc:
+        logger.error("Failed to create local storage directory: %s", exc)
+        raise
 
     try:
         engine = get_engine()

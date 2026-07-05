@@ -18,7 +18,7 @@ class AppConfig(BaseSettings):
     CORS_ORIGINS: list[str] = ["*"]
     CORS_ALLOW_CREDENTIALS: bool = False
     DATABASE_URL: PostgresDsn | None = None
-    STORAGE_BACKEND: Literal["local", "s3"] = "local"
+    STORAGE_BACKEND: Literal["local"] = "local"
     STORAGE_LOCAL_DIR: Path = Path("./uploads")
     DB_POOL_PRE_PING: bool = True
     DB_POOL_SIZE: int = Field(default=5, gt=0)
