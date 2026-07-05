@@ -298,7 +298,3 @@ class PageStrategyRunner:
     @staticmethod
     def _format_page(page_index: int, page_text: str) -> str:
         return f"Page {page_index}:\n{page_text}"
-
-
-PageExtractionService = PageStrategyRunner
-TextExtractionService = TextExtractor

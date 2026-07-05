@@ -9,7 +9,7 @@ from app.api.dependencies import (
 from app.core.config import cost_settings
 from app.core.database import get_engine, get_session_factory
 from app.core.lifecycle import get_arq_redis_settings
-from app.factories.document_processor import DocumentProcessorFactory
+from app.services.document_processor import DocumentProcessor
 from app.services.documents import DocumentService
 from app.services.page_extraction import PageStrategyRunner
 from app.services.tool_call_extractor import ToolCallExtractor
@@ -26,11 +26,9 @@ async def startup(ctx: dict) -> None:
     ctx["page_runner"] = PageStrategyRunner(
         text_extractor=ctx["tool_extractor"]
     )
-    ctx["processor_factory"] = DocumentProcessorFactory(
+    ctx["processor"] = DocumentProcessor(
         classifier=ctx["classifier"],
         page_runner=ctx["page_runner"],
-        storage=ctx["storage"],
-        model=ctx["tool_extractor"].model,
     )
     logger.info("Worker services initialized.")
 
@@ -48,7 +46,6 @@ async def extraction_job(
     strategy: str | None = None,
 ) -> None:
     session_factory = ctx["session_factory"]
-    processor_factory = ctx["processor_factory"]
 
     if isinstance(document_id, str):
         doc_uuid = UUID(document_id)
@@ -60,8 +57,9 @@ async def extraction_job(
             logger.info("Starting extraction job for document %s", doc_uuid)
             documents = DocumentService(
                 db=db,
-                processor=processor_factory.create(db),
-                processor_factory=processor_factory,
+                processor=ctx["processor"],
+                storage=ctx["storage"],
+                model=ctx["tool_extractor"].model,
                 arq_pool=None,
                 session_factory=session_factory,
                 price_for_model=cost_settings.price_for_model,

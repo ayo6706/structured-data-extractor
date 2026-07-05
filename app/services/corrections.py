@@ -8,7 +8,6 @@ from app.core.exceptions import (
 from app.models.correction import ExtractionCorrection
 from app.models.extraction import Extraction
 from app.repositories.corrections import CorrectionRepository
-from app.repositories.transactions import commit, refresh
 from app.schemas.requests import CorrectionRequest
 from app.schemas.responses import CorrectionResponse
 from app.services.validation import validate_extraction
@@ -70,8 +69,8 @@ class CorrectionService:
             corrected_by=request.corrected_by,
             note=request.note,
         )
-        await commit(db)
-        await refresh(db, correction)
+        await db.commit()
+        await db.refresh(correction)
         return correction
 
 

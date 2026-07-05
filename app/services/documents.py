@@ -13,7 +13,7 @@ from app.core.exceptions import (
     ExtractionNotFoundError,
     InvalidUploadError,
 )
-from app.factories.document_processor import DocumentProcessorFactory
+from app.infrastructure.storage import StorageBackend
 from app.jobs.extraction_queue import (
     REDIS_FALLBACK_WARNING,
     enqueue_extraction,
@@ -22,7 +22,7 @@ from app.models.document import Document, DocumentStatus
 from app.models.extraction import Extraction, ExtractionStatus
 from app.repositories.documents import DocumentRepository
 from app.repositories.extractions import ExtractionRepository
-from app.repositories.transactions import rollback
+from app.repositories.llm_usage import LLMUsageRepository
 from app.schemas.requests import CorrectionRequest, ExtractionStrategy
 from app.schemas.responses import (
     AsyncExtractionResponse,
@@ -35,6 +35,7 @@ from app.schemas.responses import (
     ExtractionResponse,
     ExtractResponse,
 )
+from app.services.audit import AuditRecorder
 from app.services.corrections import CorrectionService
 from app.services.cost_report import CostReportService, PriceResolver
 from app.services.document_intake import DocumentIntakeService
@@ -54,21 +55,28 @@ class DocumentService:
         *,
         db: AsyncSession,
         processor: DocumentProcessor,
-        processor_factory: DocumentProcessorFactory,
+        storage: StorageBackend,
+        model: str,
         arq_pool: ArqRedis | None,
         session_factory: Any,
         price_for_model: PriceResolver,
     ) -> None:
         self.db = db
         self.processor = processor
-        self.processor_factory = processor_factory
+        self.storage = storage
+        self.model = model
         self.arq_pool = arq_pool
         self.session_factory = session_factory
         self.price_for_model = price_for_model
         self.documents = DocumentRepository(db)
         self.extractions = ExtractionRepository(db)
-        self.intake = DocumentIntakeService(storage=processor_factory.storage)
-        self.audit = processor_factory.create_audit_recorder(db)
+        self.intake = DocumentIntakeService(storage=storage)
+        self.audit = AuditRecorder(
+            db=db,
+            extractions=ExtractionRepository(db),
+            llm_usage=LLMUsageRepository(db),
+            model=model,
+        )
         self.batch_concurrency_limit = BATCH_CONCURRENCY_LIMIT
         self.corrections = CorrectionService(db)
         self.cost_report = CostReportService(
@@ -79,8 +87,9 @@ class DocumentService:
     def _for_session(self, db: AsyncSession) -> "DocumentService":
         return DocumentService(
             db=db,
-            processor=self.processor_factory.create(db),
-            processor_factory=self.processor_factory,
+            processor=self.processor,
+            storage=self.storage,
+            model=self.model,
             arq_pool=self.arq_pool,
             session_factory=self.session_factory,
             price_for_model=self.price_for_model,
@@ -167,7 +176,7 @@ class DocumentService:
         try:
             await self._create_document(intake.document)
         except Exception:
-            await rollback(self.db)
+            await self.db.rollback()
             await self.intake.delete_upload(intake.document.file_path)
             raise
         document = intake.document
@@ -260,7 +269,7 @@ class DocumentService:
                 strategy=strategy,
             )
         except Exception:
-            await rollback(self.db)
+            await self.db.rollback()
             if not document_created:
                 await self.intake.delete_upload(document.file_path)
             raise

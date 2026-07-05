@@ -9,7 +9,6 @@ from app.models.extraction import Extraction, ExtractionStatus
 from app.models.llm_usage import LLMUsagePurpose
 from app.repositories.extractions import ExtractionRepository
 from app.repositories.llm_usage import LLMUsageRepository
-from app.repositories.transactions import refresh
 from app.schemas.responses import ExtractResponse
 from app.services.extraction_pipeline import PipelineResult
 from app.services.types import LLMUsageEvent
@@ -90,7 +89,7 @@ class AuditRecorder:
             extraction_input_tokens=result.extraction.input_tokens,
             extraction_output_tokens=result.extraction.output_tokens,
         )
-        await refresh(self.db, db_extraction)
+        await self.db.refresh(db_extraction)
 
         return self.to_response(
             extraction_id=db_extraction.id,
@@ -145,6 +144,3 @@ class AuditRecorder:
             input_tokens=extraction_input_tokens,
             output_tokens=extraction_output_tokens,
         )
-
-
-ExtractionAuditService = AuditRecorder

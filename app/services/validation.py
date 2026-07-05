@@ -153,7 +153,7 @@ class _ExtractionValidator:
         return fields
 
     @classmethod
-    def _recovery_input(
+    def _candidate_with_field_value(
         cls,
         schema: type[BaseModel],
         raw: dict[str, Any],
@@ -177,7 +177,7 @@ class _ExtractionValidator:
         raw_value: Any,
     ) -> Any:
         field_info = schema.model_fields[field_name]
-        candidate = cls._recovery_input(schema, {}, set())
+        candidate = cls._candidate_with_field_value(schema, {}, set())
         candidate[field_name] = raw_value
 
         try:

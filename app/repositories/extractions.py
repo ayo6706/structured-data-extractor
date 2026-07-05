@@ -72,8 +72,6 @@ class ExtractionRepository:
             func.avg(Extraction.extraction_duration_ms).label(
                 "avg_duration_ms"
             ),
-            func.sum(Extraction.input_tokens).label("total_input_tokens"),
-            func.sum(Extraction.output_tokens).label("total_output_tokens"),
         ).group_by(Extraction.doc_type)
         if from_date is not None:
             stmt = stmt.where(Extraction.created_at >= from_date)
@@ -94,8 +92,6 @@ class ExtractionRepository:
             func.avg(Extraction.extraction_duration_ms).label(
                 "avg_duration_ms"
             ),
-            func.sum(Extraction.input_tokens).label("total_input_tokens"),
-            func.sum(Extraction.output_tokens).label("total_output_tokens"),
         ).group_by(Extraction.strategy)
         if from_date is not None:
             stmt = stmt.where(Extraction.created_at >= from_date)
