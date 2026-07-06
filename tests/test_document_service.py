@@ -10,6 +10,7 @@ from app.core.exceptions import (
     DocumentNotFoundError,
     ExtractionNotFoundError,
     InvalidUploadError,
+    StorageError,
 )
 from app.models.document import DocumentStatus
 from app.models.extraction import Extraction, ExtractionStatus
@@ -155,6 +156,31 @@ async def test_extract_document_requires_exactly_one_source() -> None:
             strategy=None,
             async_mode=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_process_existing_inline_marks_document_failed_on_load_error(
+) -> None:
+    db = AsyncMock()
+    db.add = MagicMock()
+    document = MagicMock()
+    document.id = uuid4()
+    document.status = DocumentStatus.COMPLETED
+    _mock_scalar(db, document)
+    service = _service(db)
+    service.intake.load_document = AsyncMock(
+        side_effect=StorageError("stored.pdf", "load", RuntimeError("missing"))
+    )
+
+    with pytest.raises(StorageError):
+        await service._process_existing_inline(
+            document_id=document.id,
+            doc_type="invoice",
+            strategy=None,
+        )
+
+    assert document.status == DocumentStatus.FAILED
+    assert db.commit.await_count == 2
 
 
 def _extraction() -> Extraction:

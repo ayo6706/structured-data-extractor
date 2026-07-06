@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.config import ModelTokenPrice
 from app.schemas.requests import ExtractionStrategy
 from app.services.types import StrategyExtractionResult
 from scripts.evaluate_strategies import (
@@ -45,6 +46,11 @@ async def test_evaluate_strategies_summarizes_each_strategy() -> None:
         pages=["invoice text"],
         doc_type="invoice",
         strategies=(ExtractionStrategy.FULL, ExtractionStrategy.SMART),
+        model="test-model",
+        price_for_model=lambda _model: ModelTokenPrice(
+            input_token_price_usd=Decimal("0.0"),
+            output_token_price_usd=Decimal("0.0"),
+        ),
     )
 
     assert [result.strategy for result in results] == [

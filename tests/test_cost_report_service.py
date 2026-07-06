@@ -26,6 +26,10 @@ def _price_for_model(_model: str) -> ModelTokenPrice:
     )
 
 
+def _unknown_price_for_model(_model: str) -> ModelTokenPrice:
+    raise ValueError("unknown model")
+
+
 def test_build_cost_breakdown_totals_rows() -> None:
     service = CostReportService(
         db=AsyncMock(),
@@ -51,3 +55,19 @@ def test_build_cost_breakdown_totals_rows() -> None:
     assert result.breakdown["invoice"].avg_cost_per_document_usd == Decimal(
         "0.000300"
     )
+
+
+def test_build_usage_costs_keeps_unknown_models_with_zero_cost() -> None:
+    service = CostReportService(
+        db=AsyncMock(),
+        price_for_model=_unknown_price_for_model,
+    )
+
+    result = service._build_usage_costs(
+        rows=[UsageCostRow("invoice", "unknown-model", 100, 20)],
+        key_attr="group_key",
+    )
+
+    assert result["invoice"].total_input_tokens == 100
+    assert result["invoice"].total_output_tokens == 20
+    assert result["invoice"].estimated_cost_usd == Decimal("0.0")

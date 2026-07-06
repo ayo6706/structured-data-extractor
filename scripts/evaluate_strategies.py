@@ -1,12 +1,12 @@
 import argparse
 import asyncio
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from app.core.config import cost_settings, llm_settings
+from app.core.config import ModelTokenPrice, cost_settings, llm_settings
 from app.core.exceptions import ExtractionError, PDFParseError
 from app.core.lifecycle import validate_llm_api_keys
 from app.lib.pdf import parse_pdf
@@ -114,6 +114,10 @@ async def evaluate_strategies(
     pages: list[str],
     doc_type: str,
     strategies: Sequence[ExtractionStrategy] = DEFAULT_EVALUATION_STRATEGIES,
+    model: str | None = None,
+    price_for_model: Callable[
+        [str], ModelTokenPrice
+    ] = cost_settings.price_for_model,
 ) -> list[StrategyEvaluationResult]:
     results = []
     for strategy in strategies:
@@ -148,6 +152,8 @@ async def evaluate_strategies(
                 estimated_cost_usd=estimate_cost(
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    model=model,
+                    price_for_model=price_for_model,
                 ),
                 extracted_fields=extracted_fields,
                 warnings=warnings,
@@ -157,8 +163,16 @@ async def evaluate_strategies(
     return results
 
 
-def estimate_cost(*, input_tokens: int, output_tokens: int) -> Decimal:
-    price = cost_settings.price_for_model(llm_settings.EXTRACTION_MODEL)
+def estimate_cost(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    model: str | None = None,
+    price_for_model: Callable[
+        [str], ModelTokenPrice
+    ] = cost_settings.price_for_model,
+) -> Decimal:
+    price = price_for_model(model or llm_settings.EXTRACTION_MODEL)
     return (input_tokens * price.input_token_price_usd) + (
         output_tokens * price.output_token_price_usd
     )

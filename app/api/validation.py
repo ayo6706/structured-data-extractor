@@ -15,6 +15,7 @@ from app.schemas.registry import SchemaRegistry
 PDF_CONTENT_TYPE = "application/pdf"
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_BATCH_SIZE = 20
+MAX_BATCH_TOTAL_SIZE_BYTES = 100 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,16 @@ async def valid_pdf_batch(
             f"Invalid file: {invalid_file.filename}"
         )
 
-    return [await valid_pdf_upload(file) for file in files]
+    uploads = []
+    total_size = 0
+    for file in files:
+        upload = await valid_pdf_upload(file)
+        total_size += len(upload.content)
+        if total_size > MAX_BATCH_TOTAL_SIZE_BYTES:
+            raise UploadTooLargeError("Uploaded batch is too large")
+        uploads.append(upload)
+
+    return uploads
 
 
 def valid_doc_type(

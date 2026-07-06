@@ -15,6 +15,12 @@ class PriceResolver(Protocol):
         pass
 
 
+ZERO_MODEL_TOKEN_PRICE = ModelTokenPrice(
+    input_token_price_usd=Decimal("0.0"),
+    output_token_price_usd=Decimal("0.0"),
+)
+
+
 @dataclass(frozen=True)
 class _CostBreakdown:
     breakdown: dict[str, DocTypeCost]
@@ -155,7 +161,10 @@ class CostReportService:
 
         for row in rows:
             key = str(getattr(row, key_attr))
-            price = self.price_for_model(str(row.model))
+            try:
+                price = self.price_for_model(str(row.model))
+            except ValueError:
+                price = ZERO_MODEL_TOKEN_PRICE
             input_tokens = (
                 int(row.total_input_tokens)
                 if row.total_input_tokens is not None

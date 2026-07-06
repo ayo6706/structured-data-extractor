@@ -286,13 +286,18 @@ class DocumentService:
             raise DocumentNotFoundError(document_id)
 
         await self._set_document_status(document, DocumentStatus.PROCESSING)
-        pages = await self.intake.load_document(document)
-        return await self._process_document_pages(
-            document=document,
-            pages=pages,
-            doc_type=doc_type,
-            strategy=strategy,
-        )
+        try:
+            pages = await self.intake.load_document(document)
+            return await self._process_document_pages(
+                document=document,
+                pages=pages,
+                doc_type=doc_type,
+                strategy=strategy,
+            )
+        except Exception:
+            await self.documents.set_status(document, DocumentStatus.FAILED)
+            await self.db.commit()
+            raise
 
     async def _process_document_pages(
         self,

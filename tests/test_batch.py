@@ -295,6 +295,35 @@ async def test_batch_extract_size_limit(
 
 
 @pytest.mark.asyncio
+async def test_batch_extract_rejects_oversized_total_upload(
+    mock_deps: tuple[
+        AsyncMock,
+        AsyncMock,
+        AsyncMock,
+        _SessionFactory,
+        DocumentService,
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.api.validation.MAX_BATCH_TOTAL_SIZE_BYTES",
+        10,
+    )
+    pdf_bytes = _create_test_pdf(["Page 1 content"])
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/documents/extractions/batch",
+            files=[("files", ("test.pdf", pdf_bytes, "application/pdf"))],
+        )
+
+    assert response.status_code == status.HTTP_413_CONTENT_TOO_LARGE
+    assert response.json()["detail"] == "Uploaded batch is too large"
+
+
+@pytest.mark.asyncio
 async def test_batch_extract_rejects_non_pdf(
     mock_deps: tuple[
         AsyncMock,
